@@ -11,7 +11,11 @@
     color:#e6edf6;
     font-family:Inter,system-ui,Arial;
   }
-  .wrap{max-width:1100px;margin:40px auto;padding:20px;}
+  .wrap{
+    max-width:1100px;
+    margin:40px auto;
+    padding:20px;
+  }
   h1{margin-top:0}
   input,button{
     background:#0b0f19;
@@ -28,7 +32,12 @@
     color:#05070b;
     font-weight:700;
   }
-  .row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;}
+  .row{
+    display:flex;
+    gap:10px;
+    flex-wrap:wrap;
+    margin-bottom:12px;
+  }
   .card{
     background:#0f1420;
     border:1px solid #1f2933;
@@ -43,7 +52,10 @@
     max-height:70vh;
     font-size:13px;
   }
-  .status{margin:10px 0;color:#93a4b7;}
+  .status{
+    margin:10px 0;
+    color:#93a4b7;
+  }
 </style>
 </head>
 
@@ -52,52 +64,49 @@
 <h1>🚚 FMS Trip Change Audit Bot</h1>
 
 <div class="card">
-<div class="row">
-<input id="user" placeholder="Username">
-<input id="pass" placeholder="Password" type="password">
-<input id="trip" placeholder="Trip #" style="width:160px">
-<button id="run">Run Audit</button>
-</div>
-<div class="status" id="status">Idle</div>
-<pre id="out"></pre>
+  <div class="row">
+    <input id="user" placeholder="Username">
+    <input id="pass" placeholder="Password" type="password">
+    <input id="trip" placeholder="Trip #" style="width:160px">
+    <button id="run">Run Audit</button>
+  </div>
+  <div class="status" id="status">Idle</div>
+  <pre id="out"></pre>
 </div>
 </div>
 
 <script>
 (()=>{
 
-/* =========================================
-   CONFIG
-========================================= */
+/* ================= CONFIG ================= */
 
-const BASE="https://fms.item.com";
-const CLIENT="FMS_WEB";
+const BASE = "https://fms.item.com";
+const CLIENT = "FMS_WEB";
 
-const LOGIN_URL=`${BASE}/fms-platform-user/Auth/Login`;
-const TASKS_URL=`${BASE}/fms-platform-dispatch-management/TripDetail/GetTaskList`;
-const HISTORY_URL=`${BASE}/fms-platform-dispatch-management/Trips/GetTripHistory`;
-const SHIP_HISTORY=`${BASE}/fms-platform-order/shipment-orders/queryOrderLog`;
+const LOGIN_URL = `${BASE}/fms-platform-user/Auth/Login`;
+const TASKS_URL = `${BASE}/fms-platform-dispatch-management/TripDetail/GetTaskList`;
+const HISTORY_URL = `${BASE}/fms-platform-dispatch-management/Trips/GetTripHistory`;
+const SHIP_HISTORY = `${BASE}/fms-platform-order/shipment-order-history/`;
 
-const $=id=>document.getElementById(id);
-let TOKEN=null;
+const $ = id => document.getElementById(id);
+let TOKEN = null;
 
-/* =========================================
-   AUTH – UNCHANGED
-========================================= */
+/* ================= AUTH (UNCHANGED) ================= */
+
 async function auth(){
   if(TOKEN) return TOKEN;
 
-  $("status").textContent="Logging in…";
+  $("status").textContent = "Logging in…";
 
   const r = await fetch(LOGIN_URL,{
     method:"POST",
     headers:{
-      "fms-client":CLIENT,
+      "fms-client": CLIENT,
       "Content-Type":"application/json"
     },
-    body:JSON.stringify({
-      account:$("user").value.trim(),
-      password:$("pass").value.trim()
+    body: JSON.stringify({
+      account: $("user").value.trim(),
+      password: $("pass").value.trim()
     })
   });
 
@@ -111,20 +120,17 @@ async function auth(){
   return TOKEN;
 }
 
+/* ================= API HELPER ================= */
 
-/* =========================================
-   API HELPERS
-========================================= */
-
-async function apiGET(url){
+async function api(url){
   const t = await auth();
 
   const r = await fetch(url,{
     headers:{
       "accept":"application/json",
       "Content-Type":"application/json",
-      "fms-client":CLIENT,
-      "fms-token":t
+      "fms-client": CLIENT,
+      "fms-token": t
     }
   });
 
@@ -132,188 +138,206 @@ async function apiGET(url){
   return r.json();
 }
 
-async function apiPUT(url){
-  const t = await auth();
+/* ================= MATCHER ================= */
 
-  const r = await fetch(url,{
-    method:"PUT",
-    headers:{
-      "accept":"application/json",
-      "Content-Type":"application/json",
-      "fms-client":CLIENT,
-      "fms-token":t
-    }
-  });
+function confidence(eventText){
+  if(!eventText) return 0;
 
-  if(!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.json();
+  if(eventText.includes("Changed Order Status"))
+    return 3;
+
+  if(eventText.includes("TaskDispatched") ||
+     eventText.includes("TaskUndispatched"))
+    return 2;
+
+  if(eventText.includes("TMS sync"))
+    return 1;
+
+  return 0;
 }
 
+function bestShipmentMatch(tripEvent, shipmentEvents, wantedStatus){
 
-/* =========================================
-   AI MATCHER – PICKS SINGLE BEST EVENT
-========================================= */
-function pickBestShipmentEvent(logs, tripTime, pro, tripNo){
+  const tripTime = new Date(tripEvent.time).getTime();
+  const candidates = [];
 
-  let best=null;
-  let bestScore=-1;
+  shipmentEvents.forEach(ev=>{
+    if(!ev.status) return;
+    if(ev.status !== wantedStatus) return;
 
-  const tTs = new Date(tripTime).getTime();
+    const evTime = new Date(ev.event_time).getTime();
 
-  logs.forEach(l=>{
+    const diff = Math.abs(evTime - tripTime);
 
-    const txt = (l.event || "").toLowerCase();
-    let score=0;
+    if(diff > 15 * 60 * 1000) return; // 15 minute window
 
-    if(txt.includes("changed order status")) score+=10;
-    if(txt.includes("taskdispatched") || txt.includes("taskundispatched")) score+=9;
-    if(txt.includes("dispatched")) score+=7;
-    if(txt.includes("undispatched")) score+=7;
-    if(txt.includes("from [") && txt.includes("] to [")) score+=6;
+    const conf = confidence(ev.event);
 
-    // Timestamp proximity
-    try{
-      const evTs=new Date(l.event_time).getTime();
-      const delta=Math.abs(evTs - tTs);
+    if(conf === 0) return;
 
-      if(delta<=2000) score+=5;
-      else if(delta<=5000) score+=2;
-    }catch{}
-
-    if(txt.includes(pro)) score+=4;
-    if((l.trip_no_or_linehaul||"") === tripNo) score+=3;
-
-    if(score>bestScore){
-      bestScore=score;
-      best=l;
-    }
-
+    candidates.push({
+      ...ev,
+      _diff: diff,
+      _conf: conf
+    });
   });
 
-  return best;
+  if(candidates.length === 0)
+    return null;
+
+  candidates.sort((a,b)=>{
+    if(b._conf !== a._conf) return b._conf - a._conf;
+    return a._diff - b._diff;
+  });
+
+  return candidates[0];
 }
 
+/* ================= MAIN ================= */
 
-/* =========================================
-   MAIN AUDIT LOGIC
-========================================= */
 async function audit(){
 
-  $("out").textContent="";
-  TOKEN=null;
+  $("out").textContent = "";
+  TOKEN = null;
 
   try{
 
     const tripNo = $("trip").value.trim();
     if(!tripNo) throw new Error("Trip # required");
 
+    /* ---- TASKS ---- */
     $("status").textContent="Fetching Task List…";
-    const tasks = await apiGET(`${TASKS_URL}?tripNo=${tripNo}`);
+    const tasks = await api(`${TASKS_URL}?tripNo=${tripNo}`);
 
-    const MAP={};
+    const MAP = {};
 
     (tasks?.data||[]).forEach(t=>{
-      if(!t.task_no||!t.tracking_no) return;
+      if(!t.task_no || !t.tracking_no) return;
 
-      MAP[t.task_no]={
-        PRO:t.tracking_no,
-        DO:t.shipment_order_no||t.order_no||"",
-        PU:t.pu_no||""
+      MAP[t.task_no] = {
+        PRO: t.tracking_no,
+        DO: t.shipment_order_no || t.order_no || "",
+        PU: t.pu_no || ""
       };
     });
 
+    /* ---- TRIP HISTORY ---- */
     $("status").textContent="Fetching Trip History…";
-    const history = await apiGET(`${HISTORY_URL}?tripNo=${tripNo}`);
+    const hist = await api(`${HISTORY_URL}?tripNo=${tripNo}`);
 
-    let perPRO={};
+    const PER = {};
 
-    (history?.data?.trip_history_list||[]).forEach(e=>{
+    (hist?.data?.trip_history_list || []).forEach(e=>{
+
       if(!MAP[e.task_no]) return;
 
-      const m=MAP[e.task_no];
-      if(!perPRO[m.PRO]){
-        perPRO[m.PRO]={PRO:m.PRO,DO:m.DO,PU:m.PU,events:[]};
+      const desc = (e.event_description || "").toLowerCase();
+
+      if(!(desc.includes("dispatched") || desc.includes("undispatched")))
+        return;   // filter only dispatch / undispatch
+
+      const m = MAP[e.task_no];
+
+      if(!PER[m.PRO]){
+        PER[m.PRO] = {
+          PRO: m.PRO,
+          DO: m.DO,
+          PU: m.PU,
+          tripEvents: [],
+          shipEvents: []
+        };
       }
 
-      perPRO[m.PRO].events.push({
-        time:e.time,
-        desc:e.event_description,
-        user:e.user
+      PER[m.PRO].tripEvents.push({
+        time: e.time,
+        desc: e.event_description,
+        user: e.user
       });
+
     });
 
+    /* ---- SHIPMENT HISTORY + MATCH ---- */
+    $("status").textContent="Matching Shipment Status Changes…";
 
-    $("status").textContent="Fetching Shipment Histories (AI match)…";
+    for(const pro of Object.keys(PER)){
 
-    for(const pro of Object.keys(perPRO)){
+      const entry = PER[pro];
+      if(!entry.DO) continue;
 
-      const o = perPRO[pro];
-      if(!o.DO || o.events.length===0) continue;
+      let ship;
 
       try{
+        ship = await api(SHIP_HISTORY + entry.DO);
+      }catch{
+        continue;
+      }
 
-        // Shipment history MUST be PUT
-        const ship = await apiPUT(
-          `${SHIP_HISTORY}?orderNo=${o.DO}`
-        );
+      const shipEvents = ship?.data || [];
 
-        const logs = ship?.data || [];
-        const best = pickBestShipmentEvent(logs,o.events[0].time,o.PRO,tripNo);
+      entry.tripEvents.forEach(trip=>{
 
-        if(best){
-          o.events.push({
-            time: best.event_time,
-            desc: `Shipment → ${best.event}`,
-            user: best.user_name || ""
+        const want = trip.desc.toLowerCase().includes("undispatch")
+          ? "New"
+          : ( trip.desc.toLowerCase().includes("pickup") ? "PickupDispatched"
+            : trip.desc.toLowerCase().includes("linehaul") ? "LinehaulDispatched"
+            : "PickupDispatched" );
+
+        const match = bestShipmentMatch(trip, shipEvents, want);
+
+        if(match){
+          entry.shipEvents.push({
+            time: match.event_time,
+            desc: match.event,
+            user: match.user_name || ""
           });
         }
-
-      }catch{
-        // silent fail — shipment history not fatal
-      }
+      });
     }
 
+    /* ---- OUTPUT ---- */
+    $("status").textContent="Rendering…";
 
-    $("status").textContent="Rendering output…";
+    let out = "";
 
-    let out="";
+    for(const pro of Object.keys(PER).sort()){
 
-    for(const pro of Object.keys(perPRO).sort()){
+      const o = PER[pro];
 
-      const o=perPRO[pro];
+      out += `PRO ${o.PRO}\n`;
+      out += `DO  ${o.DO || "-"}\n`;
+      out += `PU  ${o.PU || "-"}\n`;
 
-      out+=`PRO ${pro}\n`;
-      out+=`DO  ${o.DO||"-"}\n`;
-      out+=`PU  ${o.PU||"-"}\n`;
+      o.tripEvents.sort((a,b)=>new Date(a.time)-new Date(b.time));
 
-      o.events.sort((a,b)=> new Date(a.time)-new Date(b.time));
-
-      o.events.forEach(e=>{
-        out+=`  ${e.time} | ${e.desc}${e.user?` (${e.user})`:""}\n`;
+      o.tripEvents.forEach(ev=>{
+        out += `  ${ev.time} | ${ev.desc}${ev.user ? ` (${ev.user})` : ""}\n`;
       });
 
-      out+="--------------------------------------------\n";
+      o.shipEvents.sort((a,b)=>new Date(a.time)-new Date(b.time));
+
+      o.shipEvents.forEach(ev=>{
+        out += `  ${ev.time} | Shipment → ${ev.desc}${ev.user ? ` (${ev.user})` : ""}\n`;
+      });
+
+      out += "--------------------------------------------\n";
     }
 
-    $("out").textContent=out || "No events found.";
+    $("out").textContent = out || "No dispatch activity found.";
     $("status").textContent="✅ Audit Complete";
 
-  }catch(err){
+  }
+  catch(err){
 
-    $("status").textContent="❌ ERROR";
-    $("out").textContent=err.message;
+    $("status").textContent="❌ Error";
+    $("out").textContent = err.message;
     console.error(err);
 
   }
-
 }
 
+/* ================= UI ================= */
 
-/* =========================================
-   UI
-========================================= */
-
-$("run").addEventListener("click",audit);
+$("run").addEventListener("click", audit);
 
 })();
 </script>
