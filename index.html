@@ -68,7 +68,6 @@ h1{
   width:20px;
   height:20px;
   fill:white;
-  color:white;
   opacity:0.85;
 }
 
@@ -165,7 +164,7 @@ $("pwToggle").addEventListener("click",()=>{
   p.type = p.type==="password" ? "text" : "password";
 });
 
-/* login - never change unless instructed */
+/* login (never change) */
 async function auth(){
   if(TOKEN) return TOKEN;
 
@@ -192,7 +191,7 @@ async function auth(){
   return TOKEN;
 }
 
-/* helper */
+/* API */
 async function api(url){
   const t=await auth();
   const r=await fetch(url,{
@@ -207,20 +206,27 @@ async function api(url){
   return r.json();
 }
 
-/* shipment event reducer */
+/* shipment event filter */
 function extractShipmentEvent(e){
-  if(!e?.event?.toLowerCase().includes("changed order status")
-     && !e?.event?.toLowerCase().includes("delivered")
-     && !e?.event?.toLowerCase().includes("pickup")
-     && !e?.event?.toLowerCase().includes("out for delivery")) return null;
+  const s = e?.event?.toLowerCase();
+  if(!s) return null;
 
-  return {
-    time:e.event_time,
-    text:e.event.split("].")[0] + "]"
-  };
+  if(
+    s.includes("changed order status") ||
+    s.includes("delivered") ||
+    s.includes("pickup") ||
+    s.includes("out for delivery")
+  ){
+    return {
+      time:e.event_time,
+      text:e.event.split("].")[0] + "]"
+    };
+  }
+
+  return null;
 }
 
-/* catch all undispatched logic */
+/* undispatch detection */
 function looksUnDispatch(desc){
   desc = desc.toLowerCase();
   return (
@@ -231,7 +237,7 @@ function looksUnDispatch(desc){
   );
 }
 
-/* enforce DO format DO######### */
+/* normalize DO */
 function normalizeDO(doVal){
   if(!doVal) return "";
   if(doVal.startsWith("DO")) return doVal;
@@ -280,31 +286,31 @@ async function audit(){
 
       const isDispatch   = desc.includes("dispatched");
       const isUnDispatch = looksUnDispatch(desc);
-
       if(!isDispatch && !isUnDispatch) return;
 
       let PRO="", DO="", PU="";
-      let mapped = ev.task_no ? MAP[ev.task_no] : null;
 
+      /* task-based mapping */
+      let mapped = ev.task_no ? MAP[ev.task_no] : null;
       if(mapped){
         PRO = mapped.PRO;
         DO  = mapped.DO;
         PU  = mapped.PU;
       }
 
-      /* fallback PRO extraction */
+      /* extract PRO from text */
       const proMatch = raw.match(/pro[#:\s]*([0-9]+)/i);
       if(!PRO && proMatch){
         PRO = proMatch[1];
       }
 
-      /* fallback DO extraction */
+      /* extract DO from text */
       const doMatch = raw.match(/do[#:\s]*([0-9]+)/i);
       if(!DO && doMatch){
         DO = normalizeDO(doMatch[1]);
       }
 
-      /* fallback order_no */
+      /* fallback: order_no */
       if(!DO && ev.order_no){
         DO = normalizeDO(ev.order_no);
       }
@@ -327,7 +333,7 @@ async function audit(){
       });
     });
 
-    /* shipment event stitching */
+    /* shipment stitching */
     $("status").textContent="Matching shipment events…";
 
     for(const bucket of Object.keys(perBucket)){
@@ -335,17 +341,19 @@ async function audit(){
 
       let DO = rec.DO === "-" ? "" : rec.DO;
 
-      /* If DO is missing, try searching by PRO */
-      if(!DO && rec.PRO && rec.PRO!=="(none)"){
-        const r = await api(SEARCH_URL + rec.PRO);
-        const found = r?.data?.orders?.[0]?.order_no;
-        if(found){
-          DO = normalizeDO(found);
-          rec.DO = DO;
-        }
+      /* ALWAYS use real shipment DO via PRO lookup */
+      if(rec.PRO && rec.PRO !== "(none)"){
+        try{
+          const s = await api(SEARCH_URL + rec.PRO);
+          const found = s?.data?.orders?.[0]?.order_no;
+          if(found){
+            DO = normalizeDO(found);
+            rec.DO = DO;
+          }
+        }catch{}
       }
 
-      /* Now fetch shipment events */
+      /* pull shipment events */
       let shipEvents=[];
       if(DO){
         try{
@@ -356,7 +364,6 @@ async function audit(){
         }
       }
 
-      /* For each trip event, pair to nearest shipment event */
       const additions=[];
 
       rec.events.forEach(te=>{
@@ -380,7 +387,6 @@ async function audit(){
             user:""
           });
         } else {
-          /* placeholder aligned under timestamp */
           additions.push({
             type:"ship",
             time:"",
@@ -392,14 +398,13 @@ async function audit(){
 
       rec.events = rec.events.concat(additions);
 
-      /* sort chronologically - trip first if timestamps match */
       rec.events.sort((a,b)=>{
         if(!a.time && !b.time) return 0;
         if(!a.time) return 1;
         if(!b.time) return -1;
 
-        let ta = new Date(a.time).getTime();
-        let tb = new Date(b.time).getTime();
+        let ta=new Date(a.time).getTime();
+        let tb=new Date(b.time).getTime();
 
         if(ta===tb){
           return a.type==="trip" ? -1 : 1;
