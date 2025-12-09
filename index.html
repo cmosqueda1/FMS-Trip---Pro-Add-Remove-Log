@@ -65,6 +65,7 @@ input[type="password"]{
   padding-right:42px;
 }
 
+/* ===== PASSWORD TOGGLE VISIBILITY FIX ===== */
 input[type="password"]::-ms-reveal,
 input[type="password"]::-ms-clear{
   filter:invert(1) brightness(1.6);
@@ -139,7 +140,7 @@ const CLIENT="FMS_WEB";
 const LOGIN_URL   = `${BASE}/fms-platform-user/Auth/Login`;
 const TASKS_URL   = `${BASE}/fms-platform-dispatch-management/TripDetail/GetTaskList`;
 const HISTORY_URL = `${BASE}/fms-platform-dispatch-management/Trips/GetTripHistory`;
-const SHIP_URL    = `${BASE}/fms-platform-order/shipment-orders/queryOrderLog`;
+const SHIP_URL    = `${BASE}/fms-platform-order/shipment-order-history/`;
 
 const $ = id => document.getElementById(id);
 
@@ -175,22 +176,18 @@ async function auth(){
 }
 
 /* ================= API ================= */
-async function api(url,method="GET",body=null){
+async function api(url){
     const t = await auth();
 
-    const opt={
-        method,
+    const r = await fetch(url,{
         headers:{
             "accept":"application/json",
             "Content-Type":"application/json",
             "fms-client":CLIENT,
             "fms-token":t
         }
-    };
+    });
 
-    if(body) opt.body=JSON.stringify(body);
-
-    const r = await fetch(url,opt);
     if(!r.ok) throw new Error(`HTTP ${r.status}`);
 
     return r.json();
@@ -206,18 +203,22 @@ function startTimer(){
 }
 function stopTimer(){ if(timerInt) clearInterval(timerInt); }
 
-/* ================= DISPATCH EVENT FILTER ================= */
-function extractStatusEvent(ev){
-    if(!ev?.event) return null;
-    if(!ev.event.includes("Changed Order Status")) return null;
+/* ================= SHIPMENT STATUS EVENT SHORTENER ================= */
+function extractStatusEvent(e){
+    if(!e || !e.event) return null;
 
-    const clean = ev.event.split(".")[0];
-    const m = clean.match(/Event\s+\[.+\]\s+Changed Order Status From\s+\[.*\]\s+to\s+\[.*\]/);
+    // Only keep true status-change events
+    if(!e.event.includes("Changed Order Status")) return null;
+
+    const firstSentence = e.event.split(".")[0]; // up to first period
+    // Try to isolate the clean "Event [...] Changed Order Status From [...] to [...]"
+    const m = firstSentence.match(
+        /Event\s+\[[^\]]+]\s+Changed Order Status From\s+\[[^\]]*]\s+to\s+\[[^\]]*]/
+    );
 
     return {
-        time: ev.event_time,
-        text: m ? m[0] : clean,
-        user: ev.operator || ""
+        time: e.event_time,
+        text: m ? m[0] : firstSentence
     };
 }
 
@@ -252,65 +253,94 @@ async function audit(){
             };
         });
 
-        /* ---------- TRIP HISTORY ---------- */
+        /* ---------- TRIP HISTORY: BUILD PER-PRO EVENT LISTS ---------- */
         $("status").textContent="Fetching trip history…";
         const hist = await api(`${HISTORY_URL}?tripNo=${tripNo}`);
 
+        // perPRO[pro] = { PRO, DO, PU, events:[ {trip:{}, ship:null} ] }
         let perPRO={};
 
         (hist?.data?.trip_history_list||[]).forEach(h=>{
             const m=MAP[h.task_no];
             if(!m) return;
-            if(!h.event_description.includes("Dispatched")) return;
+
+            // Only care about dispatched/undispatched changes for tasks
+            const desc = h.event_description || "";
+            if(
+                !desc.includes("Dispatched") &&
+                !desc.toLowerCase().includes("undispatch")
+            ){
+                return;
+            }
 
             if(!perPRO[m.PRO]){
                 perPRO[m.PRO]={
                     PRO:m.PRO,
                     DO:m.DO,
                     PU:m.PU,
-                    tripEvt:null,
-                    shipEvt:null
+                    events:[]
                 };
             }
 
-            perPRO[m.PRO].tripEvt={
-                time:h.time,
-                text:h.event_description,
-                user:h.user || ""
-            };
+            perPRO[m.PRO].events.push({
+                trip:{
+                    time:h.time,
+                    text:desc,
+                    user:h.user || ""
+                },
+                ship:null
+            });
         });
 
-        /* ---------- ✅ FIXED SHIPMENT HISTORY MATCHER ---------- */
+        /* ---------- SHIPMENT HISTORY MATCHING (ONLY LOGIC CHANGED) ---------- */
         $("status").textContent="Matching shipment history…";
 
+        // For each PRO, fetch shipment history once (by DO), then match
         for(const pro of Object.keys(perPRO)){
             const o=perPRO[pro];
-            if(!o.DO || !o.tripEvt) continue;
+            if(!o.DO || !o.events.length) continue;
 
-            let ship;
-            try{
-                ship = await api(`${SHIP_URL}?orderNo=${o.DO}`);
-            }catch{
-                ship = await api(SHIP_URL,"POST",{orderNo:o.DO});
-            }
+            // GET /shipment-order-history/{DO}
+            const ship = await api(SHIP_URL + o.DO);
+            const arr = ship?.data || [];
 
-            const arr = ship?.data?.list || [];
-            let best=null;
+            // Pre-extract and keep only status-change events
+            const shipStatusEvents = arr
+                .map(extractStatusEvent)
+                .filter(Boolean)
+                .map((e,idx)=>({...e, idx}));
 
-            arr.forEach(ev=>{
-                const s=extractStatusEvent(ev);
-                if(!s) return;
+            if(!shipStatusEvents.length) continue;
 
-                const t0=new Date(o.tripEvt.time).getTime();
-                const t1=new Date(s.time).getTime();
-                const diff=Math.abs(t1-t0);
+            const used = new Set();
 
-                if(diff<=3000 && (!best || diff<best.diff)){
-                    best={ev:s,diff};
+            // For each trip event, find closest shipment status event by timestamp
+            o.events.forEach(ev=>{
+                const tTrip = new Date(ev.trip.time).getTime();
+
+                let best=null;
+
+                shipStatusEvents.forEach(s=>{
+                    if(used.has(s.idx)) return; // don't reuse exact same shipment event
+                    const tShip = new Date(s.time).getTime();
+                    const diff = Math.abs(tShip - tTrip);
+
+                    // allow up to 5 minutes difference just in case clocks drift
+                    if(diff > 5*60*1000) return;
+
+                    if(!best || diff < best.diff){
+                        best = {s, diff};
+                    }
+                });
+
+                if(best){
+                    used.add(best.s.idx);
+                    ev.ship = {
+                        time: best.s.time,
+                        text: best.s.text
+                    };
                 }
             });
-
-            if(best) o.shipEvt=best.ev;
         }
 
         /* ---------- OUTPUT ---------- */
@@ -319,23 +349,28 @@ async function audit(){
 
         let out="";
 
-        for(const pro of Object.keys(perPRO).sort()){
-            const o=perPRO[pro];
+        const pros = Object.keys(perPRO).sort();
 
-            out+=`PRO ${o.PRO}\n`;
-            out+=`DO  ${o.DO}\n`;
-            out+=`PU  ${o.PU || "-"}\n`;
+        pros.forEach(pro=>{
+            const o = perPRO[pro];
 
-            if(o.tripEvt){
-                out+=`  ${o.tripEvt.time} | ${o.tripEvt.text} (${o.tripEvt.user})\n`;
+            out += `PRO ${o.PRO}\n`;
+            out += `DO  ${o.DO}\n`;
+            out += `PU  ${o.PU || "-"}\n`;
+
+            if(!o.events.length){
+                out += "  (No dispatch / undispatch events found)\n";
+            }else{
+                o.events.forEach(ev=>{
+                    out += `  ${ev.trip.time} | ${ev.trip.text} (${ev.trip.user})\n`;
+                    if(ev.ship){
+                        out += `  ${ev.ship.time} | ${ev.ship.text}\n`;
+                    }
+                });
             }
 
-            if(o.shipEvt){
-                out+=`  ${o.shipEvt.time} | ${o.shipEvt.text}\n`;
-            }
-
-            out+="--------------------------------------------\n";
-        }
+            out += "--------------------------------------------\n";
+        });
 
         $("out").textContent = out || "No matching events found.";
         $("status").textContent="✅ Audit complete";
