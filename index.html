@@ -1,265 +1,233 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
 <meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>🚚 FMS Trip Change Audit Bot</title>
+<title>FMS Trip Change Audit Bot</title>
 
 <style>
-:root{
-  --bg:#0a0c10;
-  --card:#0f1420;
-  --text:#e6edf6;
-  --muted:#93a4b7;
-  --accent:#7c3aed;
-  --accent2:#22d3ee;
-  --border:#1f2a3a;
-  --ok:#10b981;
-  --bad:#ef4444;
-}
-*{box-sizing:border-box}
-body{
-  margin:0;
-  background:radial-gradient(1200px 900px at 10% -10%, #121a2b 0%, transparent 60%), var(--bg);
-  color:var(--text);
-  font-family:Inter,system-ui,Segoe UI,Roboto,Ubuntu,Arial,sans-serif;
-  padding:24px;
-}
-h1{margin:0 0 12px}
-.row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px}
-input,button{
-  background:#0b0f19;
-  color:var(--text);
-  border:1px solid var(--border);
-  border-radius:12px;
-  padding:10px 14px;
-  font-size:14px;
-}
-button{
-  background:linear-gradient(90deg,var(--accent),var(--accent2));
-  border:none;
-  font-weight:700;
-  cursor:pointer;
-}
-button:hover{opacity:.95}
-pre{
-  background:#0b0f19;
-  border:1px solid var(--border);
-  border-radius:14px;
-  padding:14px;
-  font-size:13px;
-  overflow:auto;
-  white-space:pre-wrap;
-}
-.log-ok{color:var(--ok)}
-.log-bad{color:var(--bad)}
-.log-muted{color:var(--muted)}
-.sep{color:var(--muted)}
+  body{
+    margin:0;
+    background:#05070b;
+    color:#e6edf6;
+    font-family:Inter,system-ui,Arial;
+  }
+  .wrap{max-width:1100px;margin:40px auto;padding:20px;}
+  h1{margin-top:0}
+  input,button{
+    background:#0b0f19;
+    color:#e6edf6;
+    border:1px solid #1f2933;
+    border-radius:10px;
+    padding:10px 14px;
+    font-size:14px;
+  }
+  button{
+    cursor:pointer;
+    background:linear-gradient(90deg,#7c3aed,#22d3ee);
+    border:none;
+    color:#05070b;
+    font-weight:700;
+  }
+  .row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;}
+  .card{
+    background:#0f1420;
+    border:1px solid #1f2933;
+    border-radius:16px;
+    padding:16px;
+  }
+  pre{
+    background:#0b0f19;
+    border-radius:12px;
+    padding:16px;
+    overflow:auto;
+    max-height:70vh;
+    font-size:13px;
+  }
+  .status{margin:10px 0;color:#93a4b7;}
 </style>
 </head>
-<body>
 
+<body>
+<div class="wrap">
 <h1>🚚 FMS Trip Change Audit Bot</h1>
 
+<div class="card">
 <div class="row">
-  <input id="user" placeholder="FMS Username" style="width:180px"/>
-  <input id="pass" type="password" placeholder="Password" style="width:180px"/>
-  <input id="trip" placeholder="Trip #" style="width:140px"/>
-  <button onclick="runAudit()">Run Audit</button>
+<input id="user" placeholder="Username">
+<input id="pass" placeholder="Password" type="password">
+<input id="trip" placeholder="Trip #" style="width:160px">
+<button id="run">Run Audit</button>
+</div>
+<div class="status" id="status">Idle</div>
+<pre id="out"></pre>
+</div>
 </div>
 
-<pre id="log"></pre>
-
 <script>
+(()=>{
 
-const logEl = document.getElementById("log");
+const BASE="https://fms.item.com";
+const CLIENT="FMS_WEB";
 
-function log(msg, cls=""){
-  logEl.innerHTML += cls ? `<span class="${cls}">${msg}</span>\n` : msg + "\n";
-  logEl.scrollTop = logEl.scrollHeight;
-}
+const LOGIN_URL=`${BASE}/fms-platform-user/Auth/Login`;
+const TASKS_URL=`${BASE}/fms-platform-dispatch-management/TripDetail/GetTaskList`;
+const HISTORY_URL=`${BASE}/fms-platform-dispatch-management/TripDetail/GetTripHistoryList`;
+const SHIP_HISTORY=`${BASE}/fms-platform-order/shipment-order-history/`;
 
-async function api(url, method="GET", body=null, token=null){
-  const opts={
-    method,
-    credentials:"include",
+const $=id=>document.getElementById(id);
+
+let TOKEN=null;
+
+async function auth(){
+  if(TOKEN) return TOKEN;
+
+  $("status").textContent="Logging in…";
+
+  const r = await fetch(LOGIN_URL,{
+    method:"POST",
     headers:{
-      "content-type":"application/json",
-      "accept":"application/json,text/plain,*/*"
-    }
-  };
-  if(token) opts.headers["fms-token"]=token;
-  if(body) opts.body=JSON.stringify(body);
-
-  const res = await fetch(url, opts);
-  if(!res.ok){
-    throw new Error(`${res.status} ${res.statusText}`);
-  }
-  return res.json();
-}
-
-let FMS_TOKEN=null;
-
-/* ================= LOGIN ================= */
-
-async function login(u,p){
-  log("🔐 Logging in...");
-  const res = await api(
-    "https://fms.item.com/fms-platform-user/Auth/Login",
-    "POST",
-    { username:u, password:p }
-  );
-
-  FMS_TOKEN = res?.data?.token || res?.token;
-
-  if(!FMS_TOKEN) throw new Error("AUTH_FAILED");
-  log("✅ Authenticated","log-ok");
-}
-
-/* ================= TASK LIST ================= */
-
-async function getTaskList(trip){
-  log("📦 Loading task map...");
-  const j = await api(
-    `https://fms.item.com/fms-platform-dispatch-management/TripDetail/GetTaskList?tripNo=${trip}`,
-    "GET",
-    null,
-    FMS_TOKEN
-  );
-
-  const map={};
-
-  j.data.forEach(t=>{
-    map[t.task_no]={
-      pro: t.tracking_no || "—",
-      do: t.shipment_order_no || t.order_no || "—",
-      pu: t.pu_no || "—",
-    };
+      "fms-client":CLIENT,
+      "Content-Type":"application/json"
+    },
+    body:JSON.stringify({
+      account:$("user").value.trim(),
+      password:$("pass").value.trim()
+    })
   });
 
-  log(`✅ Tasks indexed: ${Object.keys(map).length}`);
-  return map;
-}
+  if(!r.ok) throw new Error("Login failed");
 
-/* ================= TRIP HISTORY ================= */
+  const j = await r.json();
+  TOKEN = j.token || j?.data?.token;
 
-async function getTripHistory(trip){
-  log("📄 Fetching trip history...");
-  const j = await api(
-    `https://fms.item.com/fms-platform-dispatch-management/TripDetail/GetTripHistoryList?tripNo=${trip}`,
-    "GET",
-    null,
-    FMS_TOKEN
-  );
-  log(`✅ Raw trip events: ${j.data.trip_history_list.length}`);
-  return j.data.trip_history_list;
-}
-
-/* ================= SHIPMENT HISTORY ================= */
-
-async function getShipmentHistory(doNo){
-  if(!doNo || doNo==="—") return [];
-
-  try{
-    const j = await api(
-      `https://fms.item.com/fms-platform-order/shipment-order-history/${doNo}`,
-      "GET",
-      null,
-      FMS_TOKEN
-    );
-    return j?.data || [];
-  }catch(e){
-    log(`⚠ Failed shipment history for ${doNo}`,"log-bad");
-    return [];
+  if(!TOKEN){
+    console.log(j);
+    throw new Error("Token missing from response");
   }
+
+  return TOKEN;
 }
 
-/* ================= AUDIT ================= */
+async function api(url,method="GET",body=null){
+  const t = await auth();
 
-async function runAudit(){
-  try{
-    logEl.innerHTML="";
-
-    const u=user.value.trim();
-    const p=pass.value.trim();
-    const t=trip.value.trim();
-
-    if(!u||!p||!t){
-      alert("Enter login + trip number");
-      return;
+  let opts={
+    method,
+    headers:{
+      "accept":"application/json",
+      "Content-Type":"application/json",
+      "fms-client":CLIENT,
+      "fms-token":t
     }
+  };
+  if(body) opts.body=JSON.stringify(body);
 
-    await login(u,p);
+  const r = await fetch(url,opts);
+  if(!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
 
-    const taskMap = await getTaskList(t);
-    const history = await getTripHistory(t);
+async function audit(){
 
-    const proMap = {};
+  $("out").textContent="";
+  TOKEN=null;
 
-    history.forEach(ev=>{
-      const task = ev.task_no;
-      if(!taskMap[task]) return;
+  try{
 
-      const ref = taskMap[task];
-      const pro = ref.pro;
+    const tripNo = $("trip").value.trim();
+    if(!tripNo) throw new Error("Trip # required");
 
-      if(!proMap[pro]){
-        proMap[pro] = {
-          pro,
-          do: ref.do,
-          pu: ref.pu,
-          events:[]
-        };
-      }
+    $("status").textContent="Authenticating…";
+    await auth();
 
-      proMap[pro].events.push({
-        time: ev.time,
-        user: ev.user || "System",
-        desc: ev.event_description
+    $("status").textContent="Fetching Task List…";
+    const tasks = await api(`${TASKS_URL}?tripNo=${tripNo}`);
+
+    const MAP={};
+
+    (tasks?.data?.tasks||[]).forEach(t=>{
+      if(!t.task_no||!t.tracking_no) return;
+      MAP[t.task_no]={
+        PRO:t.tracking_no,
+        DO:t.shipment_order_no||t.order_no||"",
+        PU:t.pu_no||""
+      };
+    });
+
+    $("status").textContent="Fetching Trip History…";
+    const hist = await api(`${HISTORY_URL}?tripNo=${tripNo}`);
+
+    let perPRO={};
+
+    (hist?.data?.trip_history_list||[]).forEach(e=>{
+      if(!MAP[e.task_no]) return;
+
+      const m=MAP[e.task_no];
+      if(!perPRO[m.PRO])
+        perPRO[m.PRO]={PRO:m.PRO,DO:m.DO,PU:m.PU,events:[]};
+
+      perPRO[m.PRO].events.push({
+        time:e.time,
+        desc:e.event_description,
+        user:e.user
       });
     });
 
-    log(`📌 Impacted PROs: ${Object.keys(proMap).length}\n`);
+    $("status").textContent="Fetching Shipment History…";
 
-    /* ================= OUTPUT ================= */
+    for(const pro of Object.keys(perPRO)){
 
-    for(const pKey of Object.keys(proMap)){
-      const R = proMap[pKey];
+      const entry=perPRO[pro];
+      if(!entry.DO) continue;
 
-      log(`PRO ${R.pro}`);
-      log(`DO ${R.do}`);
-      log(`PU ${R.pu}\n`);
+      try{
+        const ship = await api(SHIP_HISTORY+entry.DO);
+        const evs = ship?.data?.history||[];
 
-      R.events
-        .sort((a,b)=>new Date(a.time)-new Date(b.time))
-        .forEach(e=>{
-          log(`  ${e.time} — ${e.user}`);
-          log(`      ${e.desc}`,"log-muted");
+        evs.forEach(s=>{
+          entry.events.push({
+            time:s.time,
+            desc:`Shipment → ${s.status_describe || s.status}`,
+            user:s.operator||""
+          });
         });
 
-      const shipHist = await getShipmentHistory(R.do);
-
-      if(shipHist.length){
-        log("  [Shipment Status Changes]");
-        shipHist
-          .sort((a,b)=>new Date(a.create_time)-new Date(b.create_time))
-          .forEach(s=>{
-            log(`    ${s.create_time} → ${s.status_text}`);
-          });
+      }catch(e){
+        entry.events.push({time:"—",desc:"Shipment history unavailable",user:""});
       }
-
-      log("\n------------------------------\n","sep");
     }
 
-    log("✅ AUDIT COMPLETE","log-ok");
+    $("status").textContent="Rendering…";
 
-  }catch(err){
-    console.error(err);
-    log("❌ ERROR","log-bad");
-    log(err.message || err.toString(),"log-bad");
+    let out="";
+
+    for(const pro of Object.keys(perPRO).sort()){
+
+      const o=perPRO[pro];
+      out+=`PRO ${pro}\nDO ${o.DO}\nPU ${o.PU||"-"}\n`;
+
+      o.events.sort((a,b)=> new Date(a.time)-new Date(b.time));
+
+      o.events.forEach(e=>{
+        out+=`  ${e.time} | ${e.desc} ${e.user ? `(${e.user})` : ""}\n`;
+      });
+
+      out+="--------------------------------------------\n";
+    }
+
+    $("out").textContent = out || "No events found.";
+    $("status").textContent="✅ Audit Complete";
+
+  }catch(e){
+    $("status").textContent="❌ Error";
+    $("out").textContent=e.message;
+    console.error(e);
   }
 }
 
+$("run").addEventListener("click",audit);
+
+})();
 </script>
 </body>
 </html>
