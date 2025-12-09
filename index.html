@@ -166,7 +166,7 @@ $("pwToggle").addEventListener("click",()=>{
   p.type = p.type==="password" ? "text" : "password";
 });
 
-/* ---- LOGIN (unchanged, restored exactly as working version) ---- */
+/* ---- LOGIN (kept exactly as before) ---- */
 async function auth(){
   if(TOKEN) return TOKEN;
 
@@ -187,7 +187,7 @@ async function auth(){
   if(!r.ok) throw new Error("Login failed");
 
   const j = await r.json();
-  TOKEN = j.token || j?.data?.token;  // ← restored behavior
+  TOKEN = j.token || j?.data?.token;
   if(!TOKEN) throw new Error("Token missing");
 
   return TOKEN;
@@ -217,13 +217,13 @@ function extractShipmentEvent(e){
   };
 }
 
-/* Detect undispatch in any form */
+/* detect undispatch in any form */
 function looksLikeUnDispatched(desc){
   desc = desc.toLowerCase();
   return desc.includes("undispatch") || desc.includes("un-dispatch") || desc.includes("un dispatch");
 }
 
-/* Extract DO from event text (always treated as real DO per your rule) */
+/* DO-from-event extraction */
 function extractDOFromText(desc){
   const m = desc.match(/DO#\s*(DO\d+)/i);
   return m ? m[1] : "";
@@ -271,10 +271,8 @@ async function audit(){
 
       const isDispatch = desc.includes("dispatched");
       const isUnDispatch = looksLikeUnDispatched(desc);
-
       if(!isDispatch && !isUnDispatch) return;
 
-      /* map via taskNo */
       let taskNo = ev.task_no;
       let mapped = taskNo ? MAP[taskNo] : null;
 
@@ -282,7 +280,6 @@ async function audit(){
       let DO  = mapped?.DO  || "";
       let PU  = mapped?.PU  || "";
 
-      /* TaskID fallback */
       const tid = raw.match(/taskid[:\s]*([0-9]+)/i)?.[1];
       if(tid && MAP[tid]){
         PRO = PRO || MAP[tid].PRO;
@@ -290,14 +287,11 @@ async function audit(){
         PU  = PU  || MAP[tid].PU;
       }
 
-      /* DO from event text (always authoritative) */
       const doFromText = extractDOFromText(raw);
       if(doFromText) DO = doFromText;
 
-      /* fallback: order_no */
       if(!DO && ev.order_no) DO = ev.order_no;
 
-      /* fallback: PRO-only bucket */
       const bucketKey = DO || PRO || "(none)";
 
       if(!perBucket[bucketKey]){
@@ -309,7 +303,6 @@ async function audit(){
         };
       }
 
-      /* push trip event */
       perBucket[bucketKey].events.push({
         type:"trip",
         time:ev.time,
@@ -318,22 +311,20 @@ async function audit(){
       });
     });
 
-    /* ---- BUCKET MERGING (fixes your split DO issue) ---- */
-    const remap = {};
+    /* ---- BUCKET MERGE LOGIC ---- */
+    const remap={};
 
     for(const key of Object.keys(perBucket)){
       const b = perBucket[key];
-
       let finalDO = b.DO !== "-" ? b.DO : "";
 
-      /* inspect all events for DO inside text */
       b.events.forEach(ev=>{
-        const inline = extractDOFromText(ev.text);
-        if(inline) finalDO = inline;
+        const inlineDO = extractDOFromText(ev.text);
+        if(inlineDO) finalDO = inlineDO;
       });
 
       if(finalDO && finalDO !== key){
-        remap[key] = finalDO;
+        remap[key]=finalDO;
       }
     }
 
@@ -352,17 +343,16 @@ async function audit(){
 
       let DO = rec.DO !== "-" ? rec.DO : "";
 
-      /* search-all fallback */
-      if(!DO && rec.PRO && rec.PRO !== "(none)"){
-        const s=await api(SEARCH_URL + rec.PRO);
+      if(!DO && rec.PRO && rec.PRO!=="(none)"){
+        const s=await api(SEARCH_URL+rec.PRO);
         DO = s?.data?.orders?.[0]?.order_no || "";
         rec.DO = DO || "-";
       }
 
       if(!DO) continue;
 
-      const ship = await api(SHIP_URL + DO);
-      const list = ship?.data || [];
+      const ship=await api(SHIP_URL+DO);
+      const list=ship?.data||[];
 
       const extra=[];
 
@@ -370,11 +360,11 @@ async function audit(){
         let best=null;
 
         list.forEach(se=>{
-          const sx = extractShipmentEvent(se);
+          const sx=extractShipmentEvent(se);
           if(!sx) return;
-          const diff = Math.abs(new Date(ev.time) - new Date(sx.time));
-          if(!best || diff < best.diff){
-            best = {diff, ev:sx};
+          const diff=Math.abs(new Date(ev.time)-new Date(sx.time));
+          if(!best || diff<best.diff){
+            best={diff,ev:sx};
           }
         });
 
@@ -383,7 +373,7 @@ async function audit(){
             type:"ship",
             time:best.ev.time,
             text:best.ev.text,
-            user:""
+            isShip:true
           });
         }
       });
@@ -393,10 +383,8 @@ async function audit(){
       rec.events.sort((a,b)=>{
         const ta=new Date(a.time).getTime();
         const tb=new Date(b.time).getTime();
-        if(ta===tb){
-          return a.type==="trip" ? -1 : 1;
-        }
-        return ta - tb;
+        if(ta===tb) return a.type==="trip" ? -1 : 1;
+        return ta-tb;
       });
     }
 
@@ -414,7 +402,12 @@ async function audit(){
       out+=`PU  ${r.PU}\n`;
 
       r.events.forEach(ev=>{
-        out+=`  ${ev.time} | ${ev.text}${ev.user?` (${ev.user})`:""}\n`;
+        if(ev.isShip){
+          const pad=" ".repeat(19);
+          out+=`  ${pad} | ${ev.text}\n`;
+        } else {
+          out+=`  ${ev.time} | ${ev.text}${ev.user?` (${ev.user})`:""}\n`;
+        }
       });
 
       out+="--------------------------------------------\n";
