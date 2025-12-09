@@ -65,7 +65,6 @@ input[type="password"]{
   padding-right:42px;
 }
 
-/* ===== PASSWORD TOGGLE VISIBILITY FIX ===== */
 input[type="password"]::-ms-reveal,
 input[type="password"]::-ms-clear{
   filter:invert(1) brightness(1.6);
@@ -133,13 +132,14 @@ pre{
 
 <script>
 (()=>{
+
 const BASE="https://fms.item.com";
 const CLIENT="FMS_WEB";
 
 const LOGIN_URL   = `${BASE}/fms-platform-user/Auth/Login`;
 const TASKS_URL   = `${BASE}/fms-platform-dispatch-management/TripDetail/GetTaskList`;
 const HISTORY_URL = `${BASE}/fms-platform-dispatch-management/Trips/GetTripHistory`;
-const SHIP_URL    = `${BASE}/fms-platform-order/shipment-order-history/`;
+const SHIP_URL    = `${BASE}/fms-platform-order/shipment-orders/queryOrderLog`;
 
 const $ = id => document.getElementById(id);
 
@@ -175,18 +175,22 @@ async function auth(){
 }
 
 /* ================= API ================= */
-async function api(url){
+async function api(url,method="GET",body=null){
     const t = await auth();
 
-    const r = await fetch(url,{
+    const opt={
+        method,
         headers:{
             "accept":"application/json",
             "Content-Type":"application/json",
             "fms-client":CLIENT,
             "fms-token":t
         }
-    });
+    };
 
+    if(body) opt.body=JSON.stringify(body);
+
+    const r = await fetch(url,opt);
     if(!r.ok) throw new Error(`HTTP ${r.status}`);
 
     return r.json();
@@ -200,22 +204,20 @@ function startTimer(){
         $("timer").textContent=`Elapsed: ${s}s`;
     },100);
 }
-
-function stopTimer(){
-    if(timerInt) clearInterval(timerInt);
-}
+function stopTimer(){ if(timerInt) clearInterval(timerInt); }
 
 /* ================= DISPATCH EVENT FILTER ================= */
-function extractStatusEvent(e){
-    if(!e || !e.event) return null;
-    // Keep only true status-change events
-    if(!e.event.includes("Changed Order Status")) return null;
+function extractStatusEvent(ev){
+    if(!ev?.event) return null;
+    if(!ev.event.includes("Changed Order Status")) return null;
 
-    const short = e.event.split("].")[0] + "]";
+    const clean = ev.event.split(".")[0];
+    const m = clean.match(/Event\s+\[.+\]\s+Changed Order Status From\s+\[.*\]\s+to\s+\[.*\]/);
+
     return {
-        time:e.event_time,
-        text:short,
-        user:e.user_name || ""
+        time: ev.event_time,
+        text: m ? m[0] : clean,
+        user: ev.operator || ""
     };
 }
 
@@ -259,6 +261,7 @@ async function audit(){
         (hist?.data?.trip_history_list||[]).forEach(h=>{
             const m=MAP[h.task_no];
             if(!m) return;
+            if(!h.event_description.includes("Dispatched")) return;
 
             if(!perPRO[m.PRO]){
                 perPRO[m.PRO]={
@@ -270,25 +273,28 @@ async function audit(){
                 };
             }
 
-            if(h.event_description.includes("Dispatched")){
-                perPRO[m.PRO].tripEvt={
-                    time:h.time,
-                    text:h.event_description,
-                    user:h.user || ""
-                };
-            }
+            perPRO[m.PRO].tripEvt={
+                time:h.time,
+                text:h.event_description,
+                user:h.user || ""
+            };
         });
 
-        /* ---------- SHIPMENT HISTORY MATCHER ---------- */
+        /* ---------- ✅ FIXED SHIPMENT HISTORY MATCHER ---------- */
         $("status").textContent="Matching shipment history…";
 
         for(const pro of Object.keys(perPRO)){
             const o=perPRO[pro];
-            if(!o.DO) continue;
+            if(!o.DO || !o.tripEvt) continue;
 
-            const ship = await api(SHIP_URL+o.DO);
-            const arr = ship?.data||[];
+            let ship;
+            try{
+                ship = await api(`${SHIP_URL}?orderNo=${o.DO}`);
+            }catch{
+                ship = await api(SHIP_URL,"POST",{orderNo:o.DO});
+            }
 
+            const arr = ship?.data?.list || [];
             let best=null;
 
             arr.forEach(ev=>{
@@ -297,10 +303,9 @@ async function audit(){
 
                 const t0=new Date(o.tripEvt.time).getTime();
                 const t1=new Date(s.time).getTime();
-
                 const diff=Math.abs(t1-t0);
 
-                if(!best || diff < best.diff){
+                if(diff<=3000 && (!best || diff<best.diff)){
                     best={ev:s,diff};
                 }
             });
