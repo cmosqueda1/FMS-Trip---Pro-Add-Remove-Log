@@ -5,52 +5,45 @@
 <title>FMS Trip Change Audit Bot</title>
 
 <style>
-  body{
-    margin:0;
-    background:#05070b;
-    color:#e6edf6;
-    font-family:Inter,system-ui,Arial;
-  }
-
-  .wrap{max-width:1100px;margin:40px auto;padding:20px;}
-  h1{margin-top:0}
-
-  input,button{
-    background:#0b0f19;
-    color:#e6edf6;
-    border:1px solid #1f2933;
-    border-radius:10px;
-    padding:10px 14px;
-    font-size:14px;
-  }
-
-  button{
-    cursor:pointer;
-    background:linear-gradient(90deg,#7c3aed,#22d3ee);
-    border:none;
-    color:#05070b;
-    font-weight:700;
-  }
-
-  .row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;}
-
-  .card{
-    background:#0f1420;
-    border:1px solid #1f2933;
-    border-radius:16px;
-    padding:16px;
-  }
-
-  pre{
-    background:#0b0f19;
-    border-radius:12px;
-    padding:16px;
-    overflow:auto;
-    max-height:70vh;
-    font-size:13px;
-  }
-
-  .status{margin:10px 0;color:#93a4b7;}
+body{
+  margin:0;
+  background:#05070b;
+  color:#e6edf6;
+  font-family:Inter,system-ui,Arial;
+}
+.wrap{max-width:1100px;margin:40px auto;padding:20px;}
+h1{margin-top:0}
+input,button{
+  background:#0b0f19;
+  color:#e6edf6;
+  border:1px solid #1f2933;
+  border-radius:10px;
+  padding:10px 14px;
+  font-size:14px;
+}
+button{
+  cursor:pointer;
+  background:linear-gradient(90deg,#7c3aed,#22d3ee);
+  border:none;
+  color:#05070b;
+  font-weight:700;
+}
+.row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;}
+.card{
+  background:#0f1420;
+  border:1px solid #1f2933;
+  border-radius:16px;
+  padding:16px;
+}
+pre{
+  background:#0b0f19;
+  border-radius:12px;
+  padding:16px;
+  overflow:auto;
+  max-height:70vh;
+  font-size:13px;
+}
+.status{margin:10px 0;color:#93a4b7;}
 </style>
 </head>
 
@@ -66,7 +59,6 @@
     <input id="trip" placeholder="Trip #" style="width:160px">
     <button id="run">Run Audit</button>
   </div>
-
   <div class="status" id="status">Idle</div>
   <pre id="out"></pre>
 </div>
@@ -83,36 +75,34 @@ const CLIENT="FMS_WEB";
 const LOGIN_URL=`${BASE}/fms-platform-user/Auth/Login`;
 const TASKS_URL=`${BASE}/fms-platform-dispatch-management/TripDetail/GetTaskList`;
 const HISTORY_URL=`${BASE}/fms-platform-dispatch-management/Trips/GetTripHistory`;
-const SHIP_LOG_URL=`${BASE}/fms-platform-order/shipment-orders/queryOrderLog`;
+const ORDER_LOG_URL=`${BASE}/fms-platform-order/shipment-orders/queryOrderLog`;
+const SHIP_HISTORY_DETAIL=`${BASE}/fms-platform-order/shipment-order-history/`;
 
-const $ = id => document.getElementById(id);
-
-let TOKEN = null;
+const $=id=>document.getElementById(id);
+let TOKEN=null;
 
 /* ================= AUTH ================= */
 
 async function auth(){
-
   if(TOKEN) return TOKEN;
 
-  $("status").textContent = "Logging in…";
+  $("status").textContent="Logging in…";
 
   const r = await fetch(LOGIN_URL,{
     method:"POST",
     headers:{
-      "Content-Type":"application/json",
-      "fms-client": CLIENT
+      "fms-client":CLIENT,
+      "Content-Type":"application/json"
     },
     body:JSON.stringify({
-      account: $("user").value.trim(),
-      password: $("pass").value.trim()
+      account:$("user").value.trim(),
+      password:$("pass").value.trim()
     })
   });
 
   if(!r.ok) throw new Error("Login failed");
 
   const j = await r.json();
-
   TOKEN = j.token || j?.data?.token;
 
   if(!TOKEN) throw new Error("Token missing");
@@ -120,28 +110,32 @@ async function auth(){
   return TOKEN;
 }
 
-/* ================= API HELPER ================= */
+/* ================= API ================= */
 
-async function api(url){
-
+async function api(url, opts={method:"GET"}){
   const t = await auth();
+  opts.headers={
+    "accept":"application/json",
+    "Content-Type":"application/json",
+    "fms-client":CLIENT,
+    "fms-token":t
+  };
 
-  const r = await fetch(url,{
-    headers:{
-      "accept":"application/json",
-      "Content-Type":"application/json",
-      "fms-client": CLIENT,
-      "fms-token": t
-    }
-  });
-
+  const r = await fetch(url,opts);
   if(!r.ok) throw new Error(`HTTP ${r.status}`);
-
   return r.json();
 }
 
+/* ================= UTILS ================= */
 
-/* ================= MAIN AUDIT ================= */
+function fuzzyMatch(a,b){
+  if(!a||!b) return false;
+  a=a.toLowerCase();
+  b=b.toLowerCase();
+  return a.includes(b.slice(0,14)) || b.includes(a.slice(0,14));
+}
+
+/* ================= MAIN ================= */
 
 async function audit(){
 
@@ -150,169 +144,128 @@ async function audit(){
 
   try{
 
-    const tripNo = $("trip").value.trim();
+    const tripNo=$("trip").value.trim();
     if(!tripNo) throw new Error("Trip # required");
-
 
     /* -------- TASK MAP -------- */
 
     $("status").textContent="Fetching Task List…";
 
-    const tasks = await api(`${TASKS_URL}?tripNo=${tripNo}`);
+    const tasks=await api(`${TASKS_URL}?tripNo=${tripNo}`);
 
-    const MAP = {};
+    const MAP={};
 
-    (tasks?.data || []).forEach(t=>{
-      if(!t.task_no || !t.tracking_no) return;
-
-      MAP[t.task_no] = {
-        PRO: t.tracking_no,
-        DO: t.shipment_order_no || t.order_no || "",
-        PU: t.pu_no || ""
+    (tasks?.data||[]).forEach(t=>{
+      if(!t.task_no||!t.tracking_no) return;
+      MAP[t.task_no]={
+        PRO:t.tracking_no,
+        DO:t.shipment_order_no||t.order_no||"",
+        PU:t.pu_no||""
       };
     });
-
 
     /* -------- TRIP HISTORY -------- */
 
     $("status").textContent="Fetching Trip History…";
 
-    const hist = await api(`${HISTORY_URL}?tripNo=${tripNo}`);
+    let perPRO={};
 
-    let perPRO = {};
+    const hist=await api(`${HISTORY_URL}?tripNo=${tripNo}`);
 
-    (hist?.data?.trip_history_list || []).forEach(e=>{
-
+    (hist?.data?.trip_history_list||[]).forEach(e=>{
       if(!MAP[e.task_no]) return;
 
-      const m = MAP[e.task_no];
+      if(!(e.event_description||"").toLowerCase().includes("dispatch"))
+        return;
+
+      const m=MAP[e.task_no];
 
       if(!perPRO[m.PRO]){
-        perPRO[m.PRO] = {
-          PRO: m.PRO,
-          DO: m.DO,
-          PU: m.PU,
-          events:[]
-        };
+        perPRO[m.PRO]={PRO:m.PRO,DO:m.DO,PU:m.PU,events:[]};
       }
 
-      /* Allow ONLY dispatcher based trip events */
-      if(
-        (e.event_description||"").toLowerCase().includes("dispatch")
-      ){
-        perPRO[m.PRO].events.push({
-          time: e.time,
-          desc: e.event_description,
-          user: e.user
-        });
-      }
-
+      perPRO[m.PRO].events.push({
+        time:e.time,
+        desc:e.event_description,
+        user:e.user,
+        type:"trip"
+      });
     });
 
-
-    /* -------- SHIPMENT HISTORY (DISPATCH ONLY) -------- */
+    /* -------- SHIPMENT LOG LOOKUPS -------- */
 
     $("status").textContent="Fetching Shipment History…";
 
     for(const pro of Object.keys(perPRO)){
 
-      const entry = perPRO[pro];
-      if(!entry.DO) continue;
+      const o=perPRO[pro];
+      if(!o.DO) continue;
 
-      try{
+      /* ---- QUERY ORDERS LOG (ensures order exists) ---- */
+      await api(ORDER_LOG_URL,{
+        method:"PUT",
+        body:JSON.stringify({orderNo:o.DO})
+      });
 
-        const token = await auth();
+      /* ---- DETAILED HISTORY ---- */
 
-        const r = await fetch(SHIP_LOG_URL,{
-          method:"PUT",
-          headers:{
-            "accept":"application/json",
-            "Content-Type":"application/json",
-            "fms-client": CLIENT,
-            "fms-token": token
-          },
-          body: JSON.stringify({
-            orderNo: entry.DO
-          })
+      const ship=await api(SHIP_HISTORY_DETAIL+o.DO);
+
+      (ship?.data||[]).forEach(ev=>{
+
+        const txt=(ev.event||"").toLowerCase();
+
+        if(
+          !txt.includes("dispatch") &&
+          !txt.includes("undispatch")
+        ) return;
+
+        o.events.push({
+          time: ev.event_time,
+          desc: `Shipment → ${ev.event}`,
+          user: ev.user_name || "",
+          type:"ship"
         });
-
-        if(!r.ok) throw new Error("HTTP "+r.status);
-
-        const ship = await r.json();
-
-        const evs = ship?.data || [];
-
-        evs.forEach(s=>{
-
-          const text = 
-            (s.status_text || s.status_describe || s.status || "").toLowerCase();
-
-          /* ✅ ONLY DISPATCH / UNDISPATCH */
-          if(
-            text.includes("dispatch") ||
-            text.includes("undispatch") ||
-            text.includes("remove from trip") ||
-            text.includes("cancel dispatch")
-          ){
-
-            entry.events.push({
-              time: s.operate_time || s.time,
-              desc: `Shipment → ${s.status_text || s.status_describe || s.status}`,
-              user: s.operator || ""
-            });
-
-          }
-
-        });
-
-      }
-      catch{
-        /* ignore shipment lookup failures */
-      }
-
+      });
     }
 
+    /* -------- MATCH & SORT -------- */
 
-    /* -------- RENDER -------- */
-
-    $("status").textContent="Rendering…";
-
-    let out = "";
+    let out="";
 
     for(const pro of Object.keys(perPRO).sort()){
 
-      const o = perPRO[pro];
+      const o=perPRO[pro];
 
-      out += `PRO ${o.PRO}\n`;
-      out += `DO  ${o.DO || "-"}\n`;
-      out += `PU  ${o.PU || "-"}\n`;
+      out+=`PRO ${o.PRO}\n`;
+      out+=`DO  ${o.DO||"-"}\n`;
+      out+=`PU  ${o.PU||"-"}\n`;
 
-      o.events.sort((a,b)=> new Date(a.time) - new Date(b.time));
-
-      o.events.forEach(e=>{
-        out += `  ${e.time} | ${e.desc}${e.user ? ` (${e.user})` : ""}\n`;
+      o.events.sort((a,b)=>{
+        if(!a.time||!b.time) return 0;
+        return new Date(a.time)-new Date(b.time);
       });
 
-      out += "--------------------------------------------\n";
+      o.events.forEach(e=>{
+        out+=`  ${e.time} | ${e.desc}${e.user?` (${e.user})`:""}\n`;
+      });
+
+      out+="--------------------------------------------\n";
     }
 
-    $("out").textContent = out || "No dispatch activity found.";
+    $("out").textContent=out||"No dispatch activity found.";
     $("status").textContent="✅ Audit Complete";
 
   }
   catch(e){
-
     $("status").textContent="❌ Error";
     $("out").textContent=e.message;
     console.error(e);
-
   }
 
 }
 
-/* ================= UI ================= */
-
-$("run").addEventListener("click", audit);
+$("run").addEventListener("click",audit);
 
 })();
 </script>
