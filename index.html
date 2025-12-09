@@ -199,19 +199,19 @@ function stopTimer(){
 }
 
 /* ===========================================================
-   STATUS EVENT PARSER — FIXED (NO TRUNCATION)
+   STATUS EVENT PARSER — FULL TEXT
 =========================================================== */
 function extractStatusEvent(e){
   if(!e?.event?.includes("Changed Order Status")) return null;
 
   return {
     time: e.event_time,
-    text: e.event   // FULL TEXT — DO NOT SPLIT
+    text: e.event   // FULL, unmodified shipment event text
   };
 }
 
 /* ===========================================================
-   DO RESOLVER (PRO → DO)
+   DO LOOKUP
 =========================================================== */
 async function resolveDOFromPRO(pro){
   try{
@@ -295,7 +295,7 @@ async function audit(){
     });
 
     /* -------------------------------------------------------
-       RESOLVE DO + MATCH NEXT SHIPMENT EVENT
+       MATCH NEXT SHIPMENT EVENT (>= FIX APPLIED)
     ------------------------------------------------------- */
     $("status").textContent="Matching shipment history…";
 
@@ -312,16 +312,16 @@ async function audit(){
       const arr = ship?.data || [];
 
       const timeline = arr
-        .map(ev => extractStatusEvent(ev))
+        .map(ev=>extractStatusEvent(ev))
         .filter(Boolean)
         .sort((a,b)=> new Date(a.time) - new Date(b.time)); // ascending
 
       record.events.forEach(evt=>{
         const tripTime = new Date(evt.trip.time).getTime();
 
-        // NEXT SHIPMENT EVENT ONLY
+        // ✔ FIX: allow shipment events with identical timestamps
         const next = timeline.find(se =>
-          new Date(se.time).getTime() > tripTime
+          new Date(se.time).getTime() >= tripTime
         );
 
         evt.ship = next || null;
@@ -347,12 +347,10 @@ async function audit(){
         out+=`  ${ev.trip.time} | ${ev.trip.text} (${ev.trip.user})\n`;
 
         if(ev.ship){
-          // SHIPMENT EVENT: NO TIMESTAMP
           out+=`  ${ev.ship.text}\n`;
         } else {
           out+=`  — No subsequent shipment event —\n`;
         }
-
       });
 
       out+="--------------------------------------------\n";
