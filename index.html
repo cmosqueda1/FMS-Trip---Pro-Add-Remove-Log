@@ -123,7 +123,6 @@ pre{
 
 <div class="card">
   <div class="row">
-
     <input id="user" placeholder="Username">
 
     <div class="pw-wrap">
@@ -135,7 +134,6 @@ pre{
 
     <input id="trip" placeholder="Trip #" style="width:160px">
     <button id="run">Run Audit</button>
-
   </div>
 
   <div class="status" id="status">Idle</div>
@@ -168,7 +166,7 @@ $("pwToggle").addEventListener("click",()=>{
   p.type = p.type==="password" ? "text" : "password";
 });
 
-/* AUTH */
+/* ---- LOGIN (unchanged, restored exactly as working version) ---- */
 async function auth(){
   if(TOKEN) return TOKEN;
 
@@ -187,15 +185,15 @@ async function auth(){
   });
 
   if(!r.ok) throw new Error("Login failed");
-  const j=await r.json();
 
-  TOKEN=j.token || j?.data?.token;
+  const j = await r.json();
+  TOKEN = j.token || j?.data?.token;  // ← restored behavior
   if(!TOKEN) throw new Error("Token missing");
 
   return TOKEN;
 }
 
-/* API WRAPPER */
+/* ---- API Wrapper ---- */
 async function api(url){
   const t=await auth();
   const r=await fetch(url,{
@@ -210,27 +208,32 @@ async function api(url){
   return r.json();
 }
 
-/* SHIPMENT EVENT SHORTENER */
+/* shorten shipment event text */
 function extractShipmentEvent(e){
-  const desc = e?.event?.toLowerCase() || "";
-  if(!desc.includes("changed order status")) return null;
+  if(!e?.event?.toLowerCase().includes("changed order status")) return null;
   return {
     time:e.event_time,
     text:e.event.split("].")[0] + "]"
   };
 }
 
-/* UNDISPATCH FUZZY MATCH */
+/* Detect undispatch in any form */
 function looksLikeUnDispatched(desc){
   desc = desc.toLowerCase();
-  return /u\s*n\s*d\s*i\s*s\s*p\s*a\s*t\s*c\s*h/.test(desc);
+  return desc.includes("undispatch") || desc.includes("un-dispatch") || desc.includes("un dispatch");
 }
 
-/* MAIN AUDIT */
+/* Extract DO from event text (always treated as real DO per your rule) */
+function extractDOFromText(desc){
+  const m = desc.match(/DO#\s*(DO\d+)/i);
+  return m ? m[1] : "";
+}
+
+/* ---- MAIN ---- */
 async function audit(){
   $("out").textContent="";
-  $("timer").textContent="";
   $("status").textContent="Starting…";
+  $("timer").textContent="";
   TOKEN=null;
 
   const tripNo=$("trip").value.trim();
@@ -242,8 +245,7 @@ async function audit(){
   },100);
 
   try{
-
-    /* TASK LIST */
+    /* pull tasks */
     $("status").textContent="Fetching tasks…";
     const tasks=await api(`${TASKS_URL}?tripNo=${tripNo}`);
 
@@ -257,14 +259,13 @@ async function audit(){
       };
     });
 
-    /* TRIP HISTORY */
+    /* pull trip history */
     $("status").textContent="Fetching trip history…";
     const hist=await api(`${HISTORY_URL}?tripNo=${tripNo}`);
 
-    let buckets={};
+    const perBucket={};
 
     (hist?.data?.trip_history_list||[]).forEach(ev=>{
-
       const raw = ev.event_description || "";
       const desc = raw.toLowerCase();
 
@@ -273,16 +274,15 @@ async function audit(){
 
       if(!isDispatch && !isUnDispatch) return;
 
-      let PRO="",DO="",PU="";
+      /* map via taskNo */
+      let taskNo = ev.task_no;
+      let mapped = taskNo ? MAP[taskNo] : null;
 
-      /* from task_no */
-      if(ev.task_no && MAP[ev.task_no]){
-        PRO = MAP[ev.task_no].PRO;
-        DO  = MAP[ev.task_no].DO;
-        PU  = MAP[ev.task_no].PU;
-      }
+      let PRO = mapped?.PRO || "";
+      let DO  = mapped?.DO  || "";
+      let PU  = mapped?.PU  || "";
 
-      /* from TaskID */
+      /* TaskID fallback */
       const tid = raw.match(/taskid[:\s]*([0-9]+)/i)?.[1];
       if(tid && MAP[tid]){
         PRO = PRO || MAP[tid].PRO;
@@ -290,83 +290,96 @@ async function audit(){
         PU  = PU  || MAP[tid].PU;
       }
 
-      /* from order_no */
-      if(!DO && ev.order_no){
-        DO = ev.order_no;
+      /* DO from event text (always authoritative) */
+      const doFromText = extractDOFromText(raw);
+      if(doFromText) DO = doFromText;
+
+      /* fallback: order_no */
+      if(!DO && ev.order_no) DO = ev.order_no;
+
+      /* fallback: PRO-only bucket */
+      const bucketKey = DO || PRO || "(none)";
+
+      if(!perBucket[bucketKey]){
+        perBucket[bucketKey]={
+          PRO: PRO || "(none)",
+          DO:  DO  || "-",
+          PU:  PU  || "-",
+          events:[]
+        };
       }
 
-      /* from inline DO inside text */
-      const inlineDO = raw.match(/DO#?\s*(DO\d+)/i)?.[1];
-      if(inlineDO) DO = inlineDO;
-
-      /* fallback bucket key */
-      const bucketKey = PRO || DO || "(none)";
-
-      if(!buckets[bucketKey]){
-        buckets[bucketKey]={PRO:PRO||"(none)",DO:DO||"-",PU:PU||"-",events:[]};
-      }
-
-      buckets[bucketKey].events.push({
+      /* push trip event */
+      perBucket[bucketKey].events.push({
         type:"trip",
         time:ev.time,
         text:raw,
         user:ev.user||""
       });
-
     });
 
-    /* REMAP BUCKETS (merge DO buckets) */
-    let remap={};
+    /* ---- BUCKET MERGING (fixes your split DO issue) ---- */
+    const remap = {};
 
-    for(const key of Object.keys(buckets)){
-      const b = buckets[key];
+    for(const key of Object.keys(perBucket)){
+      const b = perBucket[key];
 
-      if(!b.DO || b.DO==="-" || b.DO===""){
-        let inferredDO = b.DO;
+      let finalDO = b.DO !== "-" ? b.DO : "";
 
-        b.events.forEach(ev=>{
-          const d = ev.text.match(/DO#?\s*(DO\d+)/i)?.[1];
-          if(d) inferredDO = d;
-        });
+      /* inspect all events for DO inside text */
+      b.events.forEach(ev=>{
+        const inline = extractDOFromText(ev.text);
+        if(inline) finalDO = inline;
+      });
 
-        if(inferredDO && inferredDO!=="-" && inferredDO!==""){
-          remap[key] = inferredDO;
-        }
+      if(finalDO && finalDO !== key){
+        remap[key] = finalDO;
       }
     }
 
     for(const oldKey of Object.keys(remap)){
       const newKey = remap[oldKey];
-      if(!buckets[newKey]) buckets[newKey]=buckets[oldKey];
-      else buckets[newKey].events.push(...buckets[oldKey].events);
-      delete buckets[oldKey];
+      if(!perBucket[newKey]) perBucket[newKey] = perBucket[oldKey];
+      else perBucket[newKey].events.push(...perBucket[oldKey].events);
+      delete perBucket[oldKey];
     }
 
-    /* SHIPMENT MATCHING */
+    /* ---- SHIPMENT MATCHING ---- */
     $("status").textContent="Matching shipment events…";
 
-    for(const key of Object.keys(buckets)){
-      const b=buckets[key];
+    for(const bucket of Object.keys(perBucket)){
+      const rec = perBucket[bucket];
 
-      if(b.DO === "-" || !b.DO) continue;
+      let DO = rec.DO !== "-" ? rec.DO : "";
 
-      const ship=await api(SHIP_URL + b.DO);
-      const seList = ship?.data || [];
+      /* search-all fallback */
+      if(!DO && rec.PRO && rec.PRO !== "(none)"){
+        const s=await api(SEARCH_URL + rec.PRO);
+        DO = s?.data?.orders?.[0]?.order_no || "";
+        rec.DO = DO || "-";
+      }
 
-      let add=[];
+      if(!DO) continue;
 
-      b.events.forEach(ev=>{
+      const ship = await api(SHIP_URL + DO);
+      const list = ship?.data || [];
+
+      const extra=[];
+
+      rec.events.forEach(ev=>{
         let best=null;
 
-        seList.forEach(se=>{
+        list.forEach(se=>{
           const sx = extractShipmentEvent(se);
           if(!sx) return;
           const diff = Math.abs(new Date(ev.time) - new Date(sx.time));
-          if(!best || diff<best.diff) best={diff,ev:sx};
+          if(!best || diff < best.diff){
+            best = {diff, ev:sx};
+          }
         });
 
         if(best){
-          add.push({
+          extra.push({
             type:"ship",
             time:best.ev.time,
             text:best.ev.text,
@@ -375,32 +388,32 @@ async function audit(){
         }
       });
 
-      b.events = b.events.concat(add);
+      rec.events.push(...extra);
 
-      b.events.sort((a,b)=>{
-        let ta=new Date(a.time).getTime();
-        let tb=new Date(b.time).getTime();
+      rec.events.sort((a,b)=>{
+        const ta=new Date(a.time).getTime();
+        const tb=new Date(b.time).getTime();
         if(ta===tb){
           return a.type==="trip" ? -1 : 1;
         }
-        return ta-tb;
+        return ta - tb;
       });
     }
 
+    /* ---- OUTPUT ---- */
     clearInterval(timerInt);
     $("status").textContent="✅ Audit complete";
 
-    /* OUTPUT */
     let out="";
 
-    Object.keys(buckets).forEach(key=>{
-      const b=buckets[key];
+    Object.keys(perBucket).forEach(k=>{
+      const r = perBucket[k];
 
-      out+=`PRO ${b.PRO}\n`;
-      out+=`DO  ${b.DO}\n`;
-      out+=`PU  ${b.PU}\n`;
+      out+=`PRO ${r.PRO}\n`;
+      out+=`DO  ${r.DO}\n`;
+      out+=`PU  ${r.PU}\n`;
 
-      b.events.forEach(ev=>{
+      r.events.forEach(ev=>{
         out+=`  ${ev.time} | ${ev.text}${ev.user?` (${ev.user})`:""}\n`;
       });
 
@@ -412,10 +425,9 @@ async function audit(){
   }catch(e){
     clearInterval(timerInt);
     $("status").textContent="❌ Error";
-    $("out").textContent=e.message;
+    $("out").textContent = e.message;
     console.error(e);
   }
-
 }
 
 $("run").addEventListener("click", audit);
