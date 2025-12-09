@@ -61,15 +61,6 @@ input{
   width:190px;
 }
 
-input[type="password"]{
-  padding-right:42px;
-}
-
-::-webkit-textfield-decoration-container{
-  filter:invert(1) brightness(1.6);
-  scale:1.25;
-}
-
 button{
   cursor:pointer;
   border:none;
@@ -170,7 +161,7 @@ async function auth(){
   return TOKEN;
 }
 
-/* ================= API WRAPPER ================= */
+/* ================= API ================= */
 async function api(url){
   const t = await auth();
 
@@ -203,7 +194,7 @@ function stopTimer(){
 function extractStatusEvent(e){
   if(!e?.event?.includes("Changed Order Status")) return null;
 
-  const short=e.event.split("].")[0]+"]";
+  const short=e.event.split("].")[0] + "]";
 
   return{
     time:e.event_time,
@@ -236,6 +227,7 @@ async function audit(){
     const tripNo=$("trip").value.trim();
     if(!tripNo) throw new Error("Trip # required");
 
+    /* ========== FETCH TASKS ========== */
     $("status").textContent="Fetching tasks…";
     const tasks=await api(`${TASKS_URL}?tripNo=${tripNo}`);
 
@@ -251,12 +243,13 @@ async function audit(){
       };
     });
 
+    /* ========== FETCH TRIP HISTORY ========== */
     $("status").textContent="Fetching trip history…";
     const h=await api(`${HISTORY_URL}?tripNo=${tripNo}`);
 
     const perPRO={};
 
-    /****** COLLECT DISPATCH EVENTS ******/
+    /* COLLECT ONLY DISPATCH EVENTS */
     (h?.data?.trip_history_list||[]).forEach(ev=>{
       if(!ev.event_description?.toLowerCase().includes("dispatched"))
         return;
@@ -287,7 +280,7 @@ async function audit(){
 
     });
 
-    /****** RESOLVE DO + MATCH SHIP EVENTS ******/
+    /* ========== RESOLVE DO + MATCH CORRECT SHIPMENT EVENT ========== */
     $("status").textContent="Resolving orders & matching shipments…";
 
     for(const pro of Object.keys(perPRO)){
@@ -302,25 +295,26 @@ async function audit(){
       const ship=await api(SHIP_URL+record.DO);
       const arr=ship?.data||[];
 
+      /* Sort shipment timeline ascending by timestamp */
+      const timeline = arr
+        .map(ev => extractStatusEvent(ev))
+        .filter(Boolean)
+        .sort((a,b)=> new Date(a.time) - new Date(b.time));
+
+      /* Match each trip event to the NEXT shipment event */
       record.events.forEach(evt=>{
-        let best=null;
+        const tripTime = new Date(evt.trip.time).getTime();
 
-        arr.forEach(se=>{
-          const s=extractStatusEvent(se);
-          if(!s) return;
+        let nextEvent = timeline.find(se =>
+          new Date(se.time).getTime() > tripTime
+        );
 
-          const d=Math.abs(new Date(evt.trip.time)-new Date(s.time));
-
-          if(!best || d<best.diff)
-            best={diff:d,ev:s};
-        });
-
-        if(best) evt.ship=best.ev;
+        evt.ship = nextEvent || null;
       });
 
     }
 
-    /****** OUTPUT ******/
+    /* ========== OUTPUT ========== */
     stopTimer();
     $("status").textContent="✅ Audit complete";
 
@@ -337,6 +331,8 @@ async function audit(){
         out+=`  ${ev.trip.time} | ${ev.trip.text} (${ev.trip.user})\n`;
         if(ev.ship){
           out+=`  ${ev.ship.time} | ${ev.ship.text}\n`;
+        } else {
+          out+=`  — No subsequent shipment event —\n`;
         }
       });
 
