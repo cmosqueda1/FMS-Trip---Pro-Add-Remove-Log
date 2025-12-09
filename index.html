@@ -65,17 +65,15 @@
 
 <script>
 (()=>{
-
 const BASE="https://fms.item.com";
 const CLIENT="FMS_WEB";
 
 const LOGIN_URL=`${BASE}/fms-platform-user/Auth/Login`;
 const TASKS_URL=`${BASE}/fms-platform-dispatch-management/TripDetail/GetTaskList`;
-const HISTORY_URL=`${BASE}/fms-platform-dispatch-management/TripDetail/GetTripHistoryList`;
+const HISTORY_URL=`${BASE}/fms-platform-dispatch-management/Trips/GetTripHistory`;
 const SHIP_HISTORY=`${BASE}/fms-platform-order/shipment-order-history/`;
 
 const $=id=>document.getElementById(id);
-
 let TOKEN=null;
 
 async function auth(){
@@ -100,29 +98,20 @@ async function auth(){
   const j = await r.json();
   TOKEN = j.token || j?.data?.token;
 
-  if(!TOKEN){
-    console.log(j);
-    throw new Error("Token missing from response");
-  }
-
+  if(!TOKEN) throw new Error("Token missing");
   return TOKEN;
 }
 
-async function api(url,method="GET",body=null){
+async function api(url){
   const t = await auth();
-
-  let opts={
-    method,
+  const r = await fetch(url,{
     headers:{
       "accept":"application/json",
       "Content-Type":"application/json",
       "fms-client":CLIENT,
       "fms-token":t
     }
-  };
-  if(body) opts.body=JSON.stringify(body);
-
-  const r = await fetch(url,opts);
+  });
   if(!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
 }
@@ -136,9 +125,6 @@ async function audit(){
 
     const tripNo = $("trip").value.trim();
     if(!tripNo) throw new Error("Trip # required");
-
-    $("status").textContent="Authenticating…";
-    await auth();
 
     $("status").textContent="Fetching Task List…";
     const tasks = await api(`${TASKS_URL}?tripNo=${tripNo}`);
@@ -192,7 +178,7 @@ async function audit(){
           });
         });
 
-      }catch(e){
+      }catch{
         entry.events.push({time:"—",desc:"Shipment history unavailable",user:""});
       }
     }
@@ -226,7 +212,6 @@ async function audit(){
 }
 
 $("run").addEventListener("click",audit);
-
 })();
 </script>
 </body>
