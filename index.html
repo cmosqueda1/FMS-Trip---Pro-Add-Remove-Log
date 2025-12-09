@@ -1,353 +1,252 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8"/>
+<meta charset="UTF-8">
 <title>FMS Trip Change Audit Bot</title>
-
 <style>
-:root{
-  --bg:#05070b;
-  --card:#0f1420;
-  --text:#e6edf6;
-  --muted:#93a4b7;
-  --accent:#7c3aed;
-  --accent2:#22d3ee;
-  --border:#1f2933;
-}
-
-*{box-sizing:border-box}
-
 body{
-  margin:0;
-  padding:0;
-  background:var(--bg);
-  color:var(--text);
-  font-family:Inter,system-ui,Segoe UI,Roboto,Ubuntu,Arial,sans-serif;
+  margin:0; padding:30px;
+  background:#070b14;
+  font-family:system-ui,Segoe UI,Arial;
+  color:#e6edff;
 }
-
-.wrap{
-  max-width:1100px;
-  margin:40px auto;
-  padding:20px;
+.container{
+  max-width:900px;
+  margin:auto;
+  padding:22px;
+  background:linear-gradient(135deg,#0d1423,#111b30);
+  border-radius:18px;
+  box-shadow:0 0 40px rgba(0,0,0,.45);
 }
-
 h1{
-  margin:0 0 15px 0;
-  font-size:26px;
+  margin-top:0;
+  font-size:22px;
 }
-
-.card{
-  background:linear-gradient(180deg,#111827 0%, #0b1220 100%);
-  border:1px solid var(--border);
-  border-radius:16px;
-  padding:20px;
-  box-shadow:0 20px 40px rgba(0,0,0,.5);
-}
-
 .row{
   display:flex;
-  flex-wrap:wrap;
-  gap:10px;
-  margin-bottom:10px;
+  gap:12px;
+  margin-bottom:14px;
 }
-
 input{
-  background:#0b0f19;
-  color:var(--text);
-  border:1px solid var(--border);
-  border-radius:12px;
-  padding:10px 14px;
-  font-size:14px;
-  width:190px;
+  flex:1;
+  background:#090f1c;
+  border:1px solid #253047;
+  border-radius:8px;
+  color:#fff;
+  padding:10px 12px;
 }
-
-input[type="password"]{
-  padding-right:42px;
-}
-
-/* ===== PASSWORD TOGGLE VISIBILITY FIX ===== */
-input[type="password"]::-ms-reveal,
-input[type="password"]::-ms-clear{
-  filter:invert(1) brightness(1.6);
-}
-
-::-webkit-textfield-decoration-container{
-  filter:invert(1) brightness(1.6);
-  scale:1.25;
-}
-
 button{
+  background:linear-gradient(135deg,#7c3aed,#06b6d4);
+  border:0;
+  padding:11px 20px;
+  border-radius:10px;
+  color:#fff;
   cursor:pointer;
-  border:none;
+}
+#status{
+  margin-top:10px;
+  color:#7dd3fc;
+}
+#out{
+  margin-top:20px;
+  background:#060b17;
   border-radius:12px;
-  padding:10px 18px;
-  background:linear-gradient(90deg,var(--accent),var(--accent2));
-  color:#05070b;
-  font-weight:700;
-  font-size:14px;
-}
-
-.status{
-  color:var(--muted);
-  margin:8px 0 6px;
-}
-
-.timer{
-  color:#22d3ee;
+  padding:14px;
+  font-family:Consolas,monospace;
   font-size:13px;
-}
-
-pre{
-  background:#070b14;
-  border-radius:12px;
-  padding:16px;
-  overflow:auto;
-  max-height:70vh;
-  font-size:13px;
-  border:1px solid var(--border);
   white-space:pre-wrap;
+  overflow-y:auto;
+  max-height:480px;
+}
+.proBlock{
+  margin-bottom:16px;
+  border-bottom:1px solid #1f2937;
+  padding-bottom:12px;
 }
 </style>
 </head>
-
 <body>
-<div class="wrap">
 
+<div class="container">
 <h1>🚚 FMS Trip Change Audit Bot</h1>
 
-<div class="card">
-  <div class="row">
-    <input id="user" placeholder="Username">
-    <input id="pass" placeholder="Password" type="password">
-    <input id="trip" placeholder="Trip #" style="width:160px">
-    <button id="run">Run Audit</button>
-  </div>
-
-  <div class="status" id="status">Idle</div>
-  <div class="timer" id="timer"></div>
-
-  <pre id="out"></pre>
+<div class="row">
+  <input id="user" placeholder="Username">
+  <input id="pass" placeholder="Password" type="password">
+  <input id="trip" placeholder="Trip #">
+  <button id="run">Run Audit</button>
 </div>
+
+<div id="status">Idle</div>
+<div id="out"></div>
 
 </div>
 
 <script>
-(()=>{
-const BASE="https://fms.item.com";
-const CLIENT="FMS_WEB";
+const BASE = "https://fms.item.com";
 
-const LOGIN_URL   = `${BASE}/fms-platform-user/Auth/Login`;
-const TASKS_URL   = `${BASE}/fms-platform-dispatch-management/TripDetail/GetTaskList`;
-const HISTORY_URL = `${BASE}/fms-platform-dispatch-management/Trips/GetTripHistory`;
-const SHIP_URL    = `${BASE}/fms-platform-order/shipment-order-history/`;
+const LOGIN   = BASE+"/fms-platform-user/Auth/Login";
+const TRIPLOG = BASE+"/fms-platform-dispatch-management/trip-history/query";
+const SHIPLOG = BASE+"/fms-platform-order/shipment-orders/queryOrderLog";
 
-const $ = id => document.getElementById(id);
+let TOKEN = "";
 
-let TOKEN=null;
-let timerInt=null;
+document.getElementById("run").onclick = runAudit;
 
-/* ================= AUTH ================= */
-async function auth(){
-    if(TOKEN) return TOKEN;
+async function runAudit(){
+  const u=document.getElementById("user").value;
+  const p=document.getElementById("pass").value;
+  const t=document.getElementById("trip").value;
 
-    $("status").textContent="Logging in…";
+  if(!u||!p||!t){
+    alert("Fill all fields");
+    return;
+  }
 
-    const r = await fetch(LOGIN_URL,{
-        method:"POST",
-        headers:{
-            "Content-Type":"application/json",
-            "fms-client":CLIENT
-        },
-        body:JSON.stringify({
-            account:$("user").value.trim(),
-            password:$("pass").value.trim()
-        })
+  set("Logging in...");
+  await login(u,p);
+
+  set("Loading trip history...");
+  const tripEvents = await getTripHistory(t);
+
+  if(!tripEvents.length){
+    set("No trip events found.");
+    return;
+  }
+
+  set("Loading shipment history...");
+  const shipEvents = await getShipmentHistory(t);
+
+  set("Matching & building output...");
+  const report = matchEvents(tripEvents, shipEvents);
+
+  render(report);
+  set(`Complete — ${report.length} matches`);
+}
+
+function set(msg){
+  document.getElementById("status").innerText=msg;
+}
+
+async function login(u,p){
+  const r = await fetch(LOGIN,{
+    method:"POST",
+    headers:{ "Content-Type":"application/json" },
+    body:JSON.stringify({username:u,password:p})
+  });
+  const j = await r.json();
+  TOKEN=j.data.token;
+}
+
+async function getTripHistory(trip){
+  const r = await fetch(TRIPLOG,{
+    method:"POST",
+    headers:{
+      "Authorization":TOKEN,
+      "Content-Type":"application/json"
+    },
+    body:JSON.stringify({trip_no:trip})
+  });
+  const j=await r.json();
+
+  return j.data.trip_history_list.filter(x=>{
+    return /Dispatched|Undispatched/i.test(x.event_description);
+  });
+}
+
+async function getShipmentHistory(trip){
+  const r = await fetch(SHIPLOG,{
+    method:"POST",
+    headers:{
+      "Authorization":TOKEN,
+      "Content-Type":"application/json"
+    },
+    body:JSON.stringify({tripNo:trip})
+  });
+  const j=await r.json();
+  return j.data||[];
+}
+
+// ----------------------------------------------------
+
+function extractPRO(t){
+  const m = t.match(/PRO#?\s*(\d{5,10})/i);
+  return m?m[1]:null;
+}
+
+function shortenShipment(text){
+  const m = text.match(/Event\s*\[[^\]]+\].*?to\s*\[[^\]]+\]/i);
+  return m?m[0]:"Shipment event";
+}
+
+function matchEvents(trip, ship){
+
+  const results=[];
+
+  trip.forEach(tEvt=>{
+
+    const pro = extractPRO(tEvt.event_description);
+    if(!pro) return;
+
+    const tTime=new Date(tEvt.time).getTime();
+
+    const matches = ship.filter(s=>{
+      return (
+        /Changed Order Status|PickupTaskDispatched|LinehaulTaskDispatched|UnDispatched/i.test(s.event||"")
+        && s.event.includes(pro)
+      );
     });
 
-    if(!r.ok) throw new Error("Login failed");
+    let best=null;
+    let bestDiff=Infinity;
 
-    const j = await r.json();
-    TOKEN = j.token || j?.data?.token;
-
-    if(!TOKEN) throw new Error("Token missing");
-
-    return TOKEN;
-}
-
-/* ================= API ================= */
-async function api(url){
-    const t = await auth();
-
-    const r = await fetch(url,{
-        headers:{
-            "accept":"application/json",
-            "Content-Type":"application/json",
-            "fms-client":CLIENT,
-            "fms-token":t
-        }
+    matches.forEach(m=>{
+      const sTime = new Date(m.event_time).getTime();
+      const d = Math.abs(tTime-sTime);
+      if(d<bestDiff){
+        bestDiff=d;
+        best=m;
+      }
     });
 
-    if(!r.ok) throw new Error(`HTTP ${r.status}`);
+    results.push({
+      pro,
+      trip:tEvt,
+      ship:best
+    });
 
-    return r.json();
+  });
+
+  return results;
 }
 
-/* ================= TIMER ================= */
-function startTimer(){
-    const start=Date.now();
-    timerInt = setInterval(()=>{
-        const s=((Date.now()-start)/1000).toFixed(2);
-        $("timer").textContent=`Elapsed: ${s}s`;
-    },100);
-}
+function render(rows){
+  const out=document.getElementById("out");
+  out.innerHTML="";
 
-function stopTimer(){
-    if(timerInt) clearInterval(timerInt);
-}
+  if(!rows.length){
+    out.innerText="No matching dispatch events found.";
+    return;
+  }
 
-/* ================= DISPATCH EVENT FILTER ================= */
-function extractStatusEvent(e){
-    if(!e || !e.event) return null;
-    // Keep only true status-change events
-    if(!e.event.includes("Changed Order Status")) return null;
+  rows.forEach(r=>{
 
-    const short = e.event.split("].")[0] + "]";
-    return {
-        time:e.event_time,
-        text:short,
-        user:e.user_name || ""
-    };
-}
+    const d=document.createElement("div");
+    d.className="proBlock";
 
-/* ================= MAIN ================= */
-async function audit(){
+    let txt=`PRO ${r.pro}\n`;
+    txt+=`${r.trip.time} | ${r.trip.event_description}\n`;
 
-    $("out").textContent="";
-    $("timer").textContent="";
-    $("status").textContent="Starting…";
-
-    TOKEN=null;
-    startTimer();
-
-    try{
-
-        const tripNo=$("trip").value.trim();
-        if(!tripNo) throw new Error("Trip # required");
-
-        /* ---------- TASK MAP ---------- */
-        $("status").textContent="Fetching tasks…";
-        const tasks = await api(`${TASKS_URL}?tripNo=${tripNo}`);
-
-        const MAP={};
-
-        (tasks?.data||[]).forEach(t=>{
-            if(!t.task_no || !t.tracking_no) return;
-
-            MAP[t.task_no]={
-                PRO:t.tracking_no,
-                DO:t.shipment_order_no || t.order_no || "",
-                PU:t.pu_no || ""
-            };
-        });
-
-        /* ---------- TRIP HISTORY ---------- */
-        $("status").textContent="Fetching trip history…";
-        const hist = await api(`${HISTORY_URL}?tripNo=${tripNo}`);
-
-        let perPRO={};
-
-        (hist?.data?.trip_history_list||[]).forEach(h=>{
-            const m=MAP[h.task_no];
-            if(!m) return;
-
-            if(!perPRO[m.PRO]){
-                perPRO[m.PRO]={
-                    PRO:m.PRO,
-                    DO:m.DO,
-                    PU:m.PU,
-                    tripEvt:null,
-                    shipEvt:null
-                };
-            }
-
-            if(h.event_description.includes("Dispatched")){
-                perPRO[m.PRO].tripEvt={
-                    time:h.time,
-                    text:h.event_description,
-                    user:h.user || ""
-                };
-            }
-        });
-
-        /* ---------- SHIPMENT HISTORY MATCHER ---------- */
-        $("status").textContent="Matching shipment history…";
-
-        for(const pro of Object.keys(perPRO)){
-            const o=perPRO[pro];
-            if(!o.DO) continue;
-
-            const ship = await api(SHIP_URL+o.DO);
-            const arr = ship?.data||[];
-
-            let best=null;
-
-            arr.forEach(ev=>{
-                const s=extractStatusEvent(ev);
-                if(!s) return;
-
-                const t0=new Date(o.tripEvt.time).getTime();
-                const t1=new Date(s.time).getTime();
-
-                const diff=Math.abs(t1-t0);
-
-                if(!best || diff < best.diff){
-                    best={ev:s,diff};
-                }
-            });
-
-            if(best) o.shipEvt=best.ev;
-        }
-
-        /* ---------- OUTPUT ---------- */
-        $("status").textContent="Rendering…";
-        stopTimer();
-
-        let out="";
-
-        for(const pro of Object.keys(perPRO).sort()){
-            const o=perPRO[pro];
-
-            out+=`PRO ${o.PRO}\n`;
-            out+=`DO  ${o.DO}\n`;
-            out+=`PU  ${o.PU || "-"}\n`;
-
-            if(o.tripEvt){
-                out+=`  ${o.tripEvt.time} | ${o.tripEvt.text} (${o.tripEvt.user})\n`;
-            }
-
-            if(o.shipEvt){
-                out+=`  ${o.shipEvt.time} | ${o.shipEvt.text}\n`;
-            }
-
-            out+="--------------------------------------------\n";
-        }
-
-        $("out").textContent = out || "No matching events found.";
-        $("status").textContent="✅ Audit complete";
-
-    }catch(e){
-        stopTimer();
-        $("status").textContent="❌ Error";
-        $("out").textContent=e.message;
-        console.error(e);
+    if(r.ship){
+      txt+=`${r.ship.event_time} | ${shortenShipment(r.ship.event)}\n`;
+    }else{
+      txt+=`(No shipment status-change event found)\n`;
     }
+
+    d.innerText=txt;
+    out.appendChild(d);
+  });
 }
-
-/* ================= UI ================= */
-$("run").addEventListener("click",audit);
-
-})();
 </script>
-
 </body>
 </html>
