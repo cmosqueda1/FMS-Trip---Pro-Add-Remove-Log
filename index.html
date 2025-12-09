@@ -117,6 +117,7 @@ pre{
 
 <script>
 (()=>{
+
 /* ===========================================================
    CONFIG
 =========================================================== */
@@ -204,7 +205,6 @@ function stopTimer(){
 function extractStatusEvent(e){
   if(!e?.event?.includes("Changed Order Status")) return null;
 
-  // keep only the primary message before any appended audit details
   const primary = e.event.split(".")[0].trim();
 
   return {
@@ -214,7 +214,7 @@ function extractStatusEvent(e){
 }
 
 /* ===========================================================
-   DO LOOKUP (PRO → DO)
+   DO LOOKUP
 =========================================================== */
 async function resolveDOFromPRO(pro){
   try{
@@ -251,10 +251,10 @@ async function audit(){
     const MAP={};
 
     (tasks?.data||[]).forEach(t=>{
-      if(!t.task_no || !t.tracking_no) return;
+      if(!t.task_no) return;
 
       MAP[t.task_no]={
-        PRO:t.tracking_no,
+        PRO:t.tracking_no || "",
         DO:t.shipment_order_no||t.order_no||"",
         PU:t.pu_no||""
       };
@@ -268,15 +268,20 @@ async function audit(){
 
     const perPRO={};
 
+    const isDispatchEvent = desc =>
+      desc.includes("dispatch") ||     // dispatched, dispatching
+      desc.includes("undispatch") ||   // undispatch, un-dispatch
+      desc.includes("un-dispatch");    // edge case
+
     (h?.data?.trip_history_list||[]).forEach(ev=>{
-      if(!ev.event_description?.toLowerCase().includes("dispatched"))
-        return;
+      const desc = ev.event_description?.toLowerCase() || "";
+
+      if(!isDispatchEvent(desc)) return;
 
       let pro =
         MAP[ev.task_no]?.PRO ||
-        ev.event_description.match(/PRO#\s*(\d+)/)?.[1];
-
-      if(!pro) return;
+        ev.event_description.match(/PRO#\s*(\d+)/)?.[1] ||
+        ""; // may be empty for undispatch
 
       if(!perPRO[pro]){
         perPRO[pro]={
@@ -298,7 +303,7 @@ async function audit(){
     });
 
     /* -------------------------------------------------------
-       MATCH NEXT SHIPMENT EVENT (>= FIX APPLIED)
+       MATCH NEXT SHIPMENT EVENT (>= FIX)
     ------------------------------------------------------- */
     $("status").textContent="Matching shipment history…";
 
@@ -341,7 +346,7 @@ async function audit(){
     Object.keys(perPRO).sort().forEach(p=>{
       const o=perPRO[p];
 
-      out+=`PRO ${o.PRO}\n`;
+      out+=`PRO ${o.PRO || "(none)"}\n`;
       out+=`DO  ${o.DO||"-"}\n`;
       out+=`PU  ${o.PU||"-"}\n`;
 
