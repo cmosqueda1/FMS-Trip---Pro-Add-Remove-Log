@@ -117,7 +117,6 @@ pre{
 
 <script>
 (()=>{
-
 /* ===========================================================
    CONFIG
 =========================================================== */
@@ -200,7 +199,7 @@ function stopTimer(){
 }
 
 /* ===========================================================
-   STATUS EVENT PARSER — TRUNCATES TO FIRST SENTENCE
+   STATUS EVENT PARSER — FIRST SENTENCE ONLY
 =========================================================== */
 function extractStatusEvent(e){
   if(!e?.event?.includes("Changed Order Status")) return null;
@@ -214,7 +213,7 @@ function extractStatusEvent(e){
 }
 
 /* ===========================================================
-   DO LOOKUP
+   DO LOOKUP (fallback)
 =========================================================== */
 async function resolveDOFromPRO(pro){
   try{
@@ -243,7 +242,7 @@ async function audit(){
     if(!tripNo) throw new Error("Trip # required");
 
     /* -------------------------------------------------------
-       FETCH TASKS
+       FETCH TASKS (MAP OF task_no -> PRO/DO/PU)
     ------------------------------------------------------- */
     $("status").textContent="Fetching tasks…";
     const tasks=await api(`${TASKS_URL}?tripNo=${tripNo}`);
@@ -251,12 +250,10 @@ async function audit(){
     const MAP={};
 
     (tasks?.data||[]).forEach(t=>{
-      if(!t.task_no) return;
-
-      MAP[t.task_no]={
-        PRO:t.tracking_no || "",
-        DO:t.shipment_order_no||t.order_no||"",
-        PU:t.pu_no||""
+      MAP[t.task_no] = {
+        PRO: t.tracking_no || "",
+        DO:  t.shipment_order_no || t.order_no || "",
+        PU:  t.pu_no || ""
       };
     });
 
@@ -269,25 +266,33 @@ async function audit(){
     const perPRO={};
 
     const isDispatchEvent = desc =>
-      desc.includes("dispatch") ||     // dispatched, dispatching
-      desc.includes("undispatch") ||   // undispatch, un-dispatch
-      desc.includes("un-dispatch");    // edge case
+      desc.includes("dispatch"); // catches dispatch, dispatched, undispatch, etc.
 
     (h?.data?.trip_history_list||[]).forEach(ev=>{
+
       const desc = ev.event_description?.toLowerCase() || "";
 
       if(!isDispatchEvent(desc)) return;
 
-      let pro =
-        MAP[ev.task_no]?.PRO ||
-        ev.event_description.match(/PRO#\s*(\d+)/)?.[1] ||
-        ""; // may be empty for undispatch
+      /* ---------------------------------------------------
+         Extract task_no if missing (Undispatch events)
+      --------------------------------------------------- */
+      if(!ev.task_no){
+        const m = ev.event_description.match(/TaskID:(\d+)/);
+        if(m) ev.task_no = m[1];
+      }
+
+      const task = MAP[ev.task_no] || { PRO:"", DO:"", PU:"" };
+
+      const pro = task.PRO;
+      const doNum = task.DO;
+      const puNum = task.PU;
 
       if(!perPRO[pro]){
-        perPRO[pro]={
-          PRO:pro,
-          DO: MAP[ev.task_no]?.DO || "",
-          PU: MAP[ev.task_no]?.PU || "",
+        perPRO[pro] = {
+          PRO: pro,
+          DO: doNum,
+          PU: puNum,
           events:[]
         };
       }
@@ -303,12 +308,12 @@ async function audit(){
     });
 
     /* -------------------------------------------------------
-       MATCH NEXT SHIPMENT EVENT (>= FIX)
+       MATCH SHIPMENT HISTORY FOR EACH PRO
     ------------------------------------------------------- */
     $("status").textContent="Matching shipment history…";
 
     for(const pro of Object.keys(perPRO)){
-      const record=perPRO[pro];
+      const record = perPRO[pro];
 
       if(!record.DO){
         record.DO = await resolveDOFromPRO(pro);
@@ -320,7 +325,7 @@ async function audit(){
       const arr = ship?.data || [];
 
       const timeline = arr
-        .map(ev=>extractStatusEvent(ev))
+        .map(ev => extractStatusEvent(ev))
         .filter(Boolean)
         .sort((a,b)=> new Date(a.time) - new Date(b.time));
 
