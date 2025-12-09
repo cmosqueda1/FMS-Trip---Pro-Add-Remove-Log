@@ -199,19 +199,22 @@ function stopTimer(){
 }
 
 /* ===========================================================
-   STATUS EVENT PARSER — FULL TEXT
+   STATUS EVENT PARSER — TRUNCATES TO FIRST SENTENCE
 =========================================================== */
 function extractStatusEvent(e){
   if(!e?.event?.includes("Changed Order Status")) return null;
 
+  // keep only the primary message before any appended audit details
+  const primary = e.event.split(".")[0].trim();
+
   return {
     time: e.event_time,
-    text: e.event   // FULL, unmodified shipment event text
+    text: primary
   };
 }
 
 /* ===========================================================
-   DO LOOKUP
+   DO LOOKUP (PRO → DO)
 =========================================================== */
 async function resolveDOFromPRO(pro){
   try{
@@ -314,12 +317,11 @@ async function audit(){
       const timeline = arr
         .map(ev=>extractStatusEvent(ev))
         .filter(Boolean)
-        .sort((a,b)=> new Date(a.time) - new Date(b.time)); // ascending
+        .sort((a,b)=> new Date(a.time) - new Date(b.time));
 
       record.events.forEach(evt=>{
         const tripTime = new Date(evt.trip.time).getTime();
 
-        // ✔ FIX: allow shipment events with identical timestamps
         const next = timeline.find(se =>
           new Date(se.time).getTime() >= tripTime
         );
