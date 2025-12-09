@@ -4,45 +4,38 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>FMS Trip Change Audit Bot</title>
-
 <style>
   :root{
-    --bg:#0a0c10;--card:#0f1420;--text:#e6edf6;--muted:#93a4b7;
-    --accent:#7c3aed;--accent2:#22d3ee;--ok:#10b981;
-    --bad:#ef4444;--border:#1f2a3a
+    --bg:#0a0c10;--card:#0f1420;--text:#e6edf6;
+    --muted:#93a4b7;--accent:#7c3aed;--accent2:#22d3ee;
+    --border:#1f2a3a;--ok:#10b981;--bad:#ef4444
   }
-  *{box-sizing:border-box}
   body{
+    margin:0;padding:24px;
     background:radial-gradient(1200px 900px at 10% -10%, #121a2b 0%, transparent 60%), var(--bg);
     color:var(--text);
     font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;
-    margin:0;padding:24px;
   }
-  h1{margin-top:0}
+  h1{margin:0 0 12px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px}
   input,button{
-    background:#0b0f19;
+    background:#0b0f19;color:var(--text);
     border:1px solid var(--border);
-    color:var(--text);
-    border-radius:10px;
-    padding:10px 12px;
+    border-radius:12px;
+    padding:10px 14px;
+    font-size:14px
   }
   button{
     background:linear-gradient(90deg,var(--accent),var(--accent2));
-    border:none;
-    font-weight:700;
-    cursor:pointer;
+    border:none;font-weight:700;cursor:pointer
   }
   pre{
-    background:#0b0f19;
-    border:1px solid var(--border);
-    border-radius:12px;
-    padding:12px;
-    min-height:340px;
-    max-height:500px;
-    overflow:auto;
-    white-space:pre-wrap;
+    background:#0b0f19;border:1px solid var(--border);
+    border-radius:14px;
+    padding:14px;font-size:13px;
+    min-height:340px;max-height:520px;overflow:auto;
+    white-space:pre-wrap
   }
-  .row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
 </style>
 </head>
 
@@ -51,13 +44,13 @@
 <h1>🚚 FMS Trip Change Audit Bot</h1>
 
 <div class="row">
-  <input id="user" placeholder="Username">
-  <input id="pass" type="password" placeholder="Password">
+  <input id="user" placeholder="Username"/>
+  <input id="pass" type="password" placeholder="Password"/>
 </div>
 
 <div class="row">
-  <input id="trip" placeholder="Trip # (e.g. B01MKS)">
-  <button onclick="run()">Run Audit</button>
+  <input id="trip" placeholder="Trip # (ex: B01MKS)"/>
+  <button id="runBtn">Run Audit</button>
 </div>
 
 <pre id="out">Idle…</pre>
@@ -65,11 +58,11 @@
 <script>
 (() => {
 
-/* ================== CONFIG ================== */
+/* ================= CONFIG ================= */
 
-const BASE     = "https://fms.item.com";
-const COMPANY  = "SBFH";
-const CLIENT   = "FMS_WEB";
+const BASE      = "https://fms.item.com";
+const CLIENT    = "FMS_WEB";
+const COMPANY   = "SBFH";
 
 const LOGIN_URL =
   `${BASE}/fms-platform-user/Auth/Login`;
@@ -80,48 +73,48 @@ const TRIP_HISTORY_URL =
 const SHIPMENT_HISTORY_URL =
   `${BASE}/fms-platform-order/shipment-order-history`;
 
-/* ================== HELPERS ================= */
+/* ================= DOM ================= */
 
-const out = document.getElementById("out");
+const out    = document.getElementById("out");
+const runBtn = document.getElementById("runBtn");
+const user   = document.getElementById("user");
+const pass   = document.getElementById("pass");
+const tripEl = document.getElementById("trip");
+
 const log = t => out.textContent += t + "\n";
 const ts  = t => new Date(t).getTime();
 
-/* ================== AUTH ==================== */
+/* ================= AUTH ================= */
 
 async function auth(){
-
-  log("🔐 Logging in…");
-
-  const res = await fetch(LOGIN_URL,{
+  log("🔐 Logging in...");
+  const r = await fetch(LOGIN_URL,{
     method:"POST",
     headers:{
       "fms-client": CLIENT,
       "Content-Type":"application/json"
     },
     body: JSON.stringify({
-      account: user.value,
+      account: user.value.trim(),
       password: pass.value
     })
   });
 
-  if(!res.ok)
-    throw new Error(`Login failed HTTP ${res.status}`);
+  if(!r.ok) throw new Error(`Login HTTP ${r.status}`);
 
-  const j = await res.json();
+  const j = await r.json();
 
   const token = j?.token || j?.data?.token;
 
-  if(!token)
-    throw new Error("No token received");
+  if(!token) throw new Error("FMS token not returned");
 
   log("✅ Authenticated\n");
-
   return token;
 }
 
-/* ================= FETCHERS ================= */
+/* ================= REQUEST HELPERS ================= */
 
-function buildHeaders(token){
+function headers(token){
   return {
     "accept":"application/json, text/plain, */*",
     "fms-client": CLIENT,
@@ -130,149 +123,153 @@ function buildHeaders(token){
   };
 }
 
-async function fetchTrip(token,trip){
+async function getTripHistory(token,trip){
+  log("📥 Fetching trip history...");
+  const r = await fetch(
+    `${TRIP_HISTORY_URL}?tripNo=${encodeURIComponent(trip)}`,
+    { headers: headers(token) }
+  );
 
-  log("📥 Loading trip history…");
-
-  const r = await fetch(`${TRIP_HISTORY_URL}?tripNo=${trip}`,{
-    headers: buildHeaders(token)
-  });
-
-  if(!r.ok)
-    throw new Error(`Trip history HTTP ${r.status}`);
+  if(!r.ok) throw new Error(`Trip history HTTP ${r.status}`);
 
   const j = await r.json();
 
   return j?.data?.trip_history_list || [];
 }
 
-async function fetchShipmentHistory(token,DO){
+async function getShipmentHistory(token,DO){
+  const r = await fetch(
+    `${SHIPMENT_HISTORY_URL}/${encodeURIComponent(DO)}`,
+    { headers: headers(token) }
+  );
 
-  const r = await fetch(`${SHIPMENT_HISTORY_URL}/${DO}`,{
-    headers: buildHeaders(token)
-  });
-
-  if(!r.ok)
-    throw new Error(`Shipment history HTTP ${r.status}`);
+  if(!r.ok) throw new Error(`Shipment history HTTP ${r.status}`);
 
   const j = await r.json();
 
   return j?.data || [];
 }
 
-/* ================= PARSERS =================== */
+/* ================= PARSERS ================= */
 
-function extractPRO(e){
-  if(e.tracking_no) return e.tracking_no;
-  const m = e.event_description.match(/PRO#\s*(\d+)/i);
-  return m ? m[1] : null;
+function extractPRO(ev){
+  if(ev.tracking_no) return ev.tracking_no;
+  const m=ev.event_description.match(/PRO#\s*(\d+)/i);
+  return m?m[1]:null;
 }
 
-function extractDO(text){
-  const m = text.match(/DO(\d+)/i);
-  return m ? "DO" + m[1] : null;
+function extractDO(desc){
+  const m=desc.match(/DO(\d+)/i);
+  return m ? "DO"+m[1] : null;
 }
 
 function classify(desc){
-  if(/Dispatched/i.test(desc))
-    return "Dispatch → Added to Trip";
-  if(/Removed|Undispatch/i.test(desc))
-    return "Undispatch → Removed from Trip";
-  if(/Linehaul/i.test(desc))
-    return "Linehaul Status Change";
+  const d = desc.toLowerCase();
+  if(d.includes("dispatched"))      return "Dispatch → Added to Trip";
+  if(d.includes("removed") ||
+     d.includes("undispatch"))      return "Undispatch → Removed from Trip";
+  if(d.includes("linehaul"))        return "Linehaul Status Change";
   return null;
 }
 
-/* ================= CORRELATION =============== */
-
-function correlate(ev,history){
-
-  const t0 = ts(ev.time);
-
+function correlate(event,history){
+  const t0 = ts(event.time);
   let best = null;
 
   for(const h of history){
-    const d = Math.abs(ts(h.event_time) - t0);
-    if(d < 45000 && (!best || d < best.d)){
-      best = {d,h};
+    const dt = Math.abs(ts(h.event_time) - t0);
+    if(dt < 45000 && (!best || dt < best.dt)){
+      best = {dt, msg:h.event};
     }
   }
 
-  return best ? best.h.event : "No matching shipment history";
+  return best ? best.msg : "No correlated shipment status";
 }
 
-/* ================= RUN ======================= */
+/* ================= MAIN ================= */
 
 async function run(){
 
-  out.textContent = "";
+  out.textContent="";
 
   try{
 
+    if(!user.value || !pass.value)
+      throw new Error("Username and password required");
+
+    if(!tripEl.value.trim())
+      throw new Error("Trip number required");
+
     const token = await auth();
 
-    const tripNo = trip.value.trim();
-    if(!tripNo) throw new Error("Trip is required");
+    const trip = tripEl.value.trim();
 
-    const tripEvents = await fetchTrip(token,tripNo);
+    const raw = await getTripHistory(token,trip);
 
-    log(`📄 ${tripEvents.length} raw trip events\n`);
+    log(`📄 ${raw.length} raw trip events pulled\n`);
 
-    const changes = [];
+    const changes=[];
 
-    tripEvents.forEach(e=>{
-      const pro = extractPRO(e);
-      const typ = classify(e.event_description);
-      if(!pro || !typ) return;
+    raw.forEach(ev=>{
+      const pro = extractPRO(ev);
+      const type= classify(ev.event_description);
+      if(!pro || !type) return;
 
       changes.push({
         pro,
-        do   : extractDO(e.event_description),
-        time : e.time,
-        user : e.user || "",
-        type : typ
+        do   : extractDO(ev.event_description),
+        time : ev.time,
+        user : ev.user||"",
+        type
       });
     });
 
+    if(!changes.length){
+      log("No PRO movement events detected.");
+      return;
+    }
+
     const pros=[...new Set(changes.map(x=>x.pro))];
 
-    log(`🔍 Found ${pros.length} impacted PRO(s)\n`);
+    log(`🔍 ${pros.length} impacted PRO(s)\n`);
 
     for(const pro of pros){
 
       log(`PRO ${pro}`);
       log("--------------------------------");
 
-      const evs = changes.filter(x=>x.pro===pro);
-
+      const evs = changes.filter(e=>e.pro===pro);
       const DO  = evs[0].do;
 
       if(!DO){
-        log("Unable to resolve DO\n");
+        log("No DO found\n");
         continue;
       }
 
-      const shipmentHistory = await fetchShipmentHistory(token,DO);
+      const history = await getShipmentHistory(token,DO);
 
-      evs.forEach(ev=>{
-        const status = correlate(ev, shipmentHistory);
-        log(ev.time);
-        log(`Action: ${ev.type}`);
-        log(`User: ${ev.user}`);
+      for(const e of evs){
+        const status = correlate(e,history);
+        log(e.time);
+        log(`Action: ${e.type}`);
+        log(`User: ${e.user}`);
         log(`Status Event: ${status}\n`);
-      });
+      }
 
-      log("\n");
+      log("");
     }
 
     log("✅ AUDIT COMPLETE");
 
   }catch(err){
-
-    log("\n❌ ERROR");
+    log("\n❌ ERROR:");
     log(err.message || err.toString());
   }
 }
+
+/* ================= EVENTS ================= */
+
+runBtn.addEventListener("click", run);
 
 })();
 </script>
