@@ -11,7 +11,7 @@
     color:#e6edf6;
     font-family:Inter,system-ui,Arial;
   }
-  .wrap{max-width:1100px;margin:40px auto;padding:20px;}
+  .wrap{max-width:1200px;margin:40px auto;padding:20px;}
   h1{margin-top:0}
   input,button{
     background:#0b0f19;
@@ -28,6 +28,7 @@
     color:#05070b;
     font-weight:700;
   }
+  button:hover{opacity:.9}
   .row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;}
   .card{
     background:#0f1420;
@@ -35,6 +36,7 @@
     border-radius:16px;
     padding:16px;
   }
+  .status{margin:10px 0;color:#93a4b7;}
   pre{
     background:#0b0f19;
     border-radius:12px;
@@ -42,8 +44,8 @@
     overflow:auto;
     max-height:70vh;
     font-size:13px;
+    line-height:1.45em;
   }
-  .status{margin:10px 0;color:#93a4b7;}
 </style>
 </head>
 
@@ -52,32 +54,35 @@
 <h1>🚚 FMS Trip Change Audit Bot</h1>
 
 <div class="card">
-<div class="row">
-<input id="user" placeholder="Username">
-<input id="pass" placeholder="Password" type="password">
-<input id="trip" placeholder="Trip #" style="width:160px">
-<button id="run">Run Audit</button>
-</div>
-<div class="status" id="status">Idle</div>
-<pre id="out"></pre>
+  <div class="row">
+    <input id="user" placeholder="Username">
+    <input id="pass" placeholder="Password" type="password">
+    <input id="trip" placeholder="Trip #" style="width:160px">
+    <button id="run">Run Audit</button>
+  </div>
+
+  <div class="status" id="status">Idle</div>
+  <pre id="out"></pre>
 </div>
 </div>
 
 <script>
 (()=>{
 
-const BASE="https://fms.item.com";
-const CLIENT="FMS_WEB";
+const BASE = "https://fms.item.com";
+const CLIENT = "FMS_WEB";
 
-const LOGIN_URL=`${BASE}/fms-platform-user/Auth/Login`;
-const TASKS_URL=`${BASE}/fms-platform-dispatch-management/TripDetail/GetTaskList`;
-const HISTORY_URL=`${BASE}/fms-platform-dispatch-management/Trips/GetTripHistory`;
-const SHIP_HISTORY=`${BASE}/fms-platform-order/shipment-orders/queryOrderLog?orderNo=`;   // ✅ correct endpoint
+const LOGIN_URL  = `${BASE}/fms-platform-user/Auth/Login`;
+const TASKS_URL  = `${BASE}/fms-platform-dispatch-management/TripDetail/GetTaskList`;
+const HISTORY_URL= `${BASE}/fms-platform-dispatch-management/Trips/GetTripHistory`;
+const SHIP_HIST  = `${BASE}/fms-platform-order/shipment-order-history/`;
 
 const $=id=>document.getElementById(id);
 let TOKEN=null;
 
-/* ===== AUTH – UNCHANGED ===== */
+/* =====================================================
+   AUTH — UNCHANGED (your working logic)
+=====================================================*/
 async function auth(){
   if(TOKEN) return TOKEN;
 
@@ -101,15 +106,13 @@ async function auth(){
   TOKEN = j.token || j?.data?.token;
 
   if(!TOKEN) throw new Error("Token missing");
-
   return TOKEN;
 }
 
-/* ===== API HELPER – UNCHANGED ===== */
 async function api(url){
   const t = await auth();
-
   const r = await fetch(url,{
+    method:"GET",
     headers:{
       "accept":"application/json",
       "Content-Type":"application/json",
@@ -122,124 +125,144 @@ async function api(url){
   return r.json();
 }
 
-/* ===== MAIN AUDIT ===== */
+/* =====================================================
+   STATUS TRANSITION PARSER
+=====================================================*/
+function parseTransition(text){
+  const m = text.match(/Changed Order Status From \[(.*?)\] to \[(.*?)\]/i);
+  if(!m) return null;
+  return { from:m[1], to:m[2] };
+}
+
+/* =====================================================
+   MAIN AUDIT
+=====================================================*/
 async function audit(){
 
   $("out").textContent="";
   TOKEN=null;
 
   try{
-
     const tripNo = $("trip").value.trim();
     if(!tripNo) throw new Error("Trip # required");
 
-    /* ---- TASK MAP ---- */
     $("status").textContent="Fetching Task List…";
+
     const tasks = await api(`${TASKS_URL}?tripNo=${tripNo}`);
 
     const MAP={};
 
-    (tasks?.data||[]).forEach(t=>{
-      if(!t.task_no||!t.tracking_no) return;
-
+    (tasks?.data?.tasks||[]).forEach(t=>{
+      if(!t.task_no || !t.tracking_no) return;
       MAP[t.task_no]={
-        PRO:t.tracking_no,
-        DO:t.shipment_order_no||t.order_no||"",
-        PU:t.pu_no||""
+        PRO: t.tracking_no,
+        DO : t.shipment_order_no||t.order_no||"",
+        PU : t.pu_no||""
       };
     });
 
-    /* ---- TRIP HISTORY ---- */
     $("status").textContent="Fetching Trip History…";
+
     const hist = await api(`${HISTORY_URL}?tripNo=${tripNo}`);
 
-    let perPRO={};
+    const PER_PRO={};
 
-    (hist?.data?.trip_history_list||[]).forEach(e=>{
-      if(!MAP[e.task_no]) return;
+    (hist?.data?.trip_history_list||[]).forEach(h=>{
+      const map=MAP[h.task_no];
+      if(!map) return;
 
-      const m=MAP[e.task_no];
-      if(!perPRO[m.PRO]){
-        perPRO[m.PRO]={
-          PRO:m.PRO,
-          DO:m.DO,
-          PU:m.PU,
+      if(!PER_PRO[map.PRO]){
+        PER_PRO[map.PRO]={
+          PRO:map.PRO,
+          DO:map.DO,
+          PU:map.PU,
           events:[]
         };
       }
 
-      perPRO[m.PRO].events.push({
-        time:e.time,
-        desc:e.event_description,
-        user:e.user
+      PER_PRO[map.PRO].events.push({
+        time:h.time,
+        text:h.event_description,
+        user:h.user,
+        source:"TRIP"
       });
     });
 
-    /* ---- SHIPMENT HISTORY ---- */
     $("status").textContent="Fetching Shipment History…";
 
-    for(const pro of Object.keys(perPRO)){
-
-      const entry=perPRO[pro];
-      if(!entry.DO) continue;
+    for(const pro of Object.keys(PER_PRO)){
+      const item=PER_PRO[pro];
+      if(!item.DO) continue;
 
       try{
+        const ship = await api(SHIP_HIST + item.DO);
 
-        const ship = await api(SHIP_HISTORY + entry.DO);
+        (ship?.data||[]).forEach(s=>{
+          const t=parseTransition(s.event||"");
 
-        const evs = ship?.data?.list || [];
-
-        evs.forEach(s=>{
-          entry.events.push({
-            time: s.operate_time,
-            desc: `Shipment → ${s.status_text || s.status_describe || s.status}`,
-            user: s.operator || ""
+          item.events.push({
+            time:s.event_time,
+            text:s.event,
+            from:t?.from||"",
+            to:t?.to||"",
+            user:s.user_name||"",
+            source:"SHIP"
           });
         });
 
       }catch{
-        entry.events.push({
+        item.events.push({
           time:"—",
-          desc:"Shipment history unavailable",
-          user:""
+          text:"Shipment history unavailable",
+          source:"SHIP"
         });
       }
     }
 
-    /* ---- RENDER OUTPUT ---- */
     $("status").textContent="Rendering…";
 
     let out="";
 
-    for(const pro of Object.keys(perPRO).sort()){
+    for(const pro of Object.keys(PER_PRO).sort()){
 
-      const o=perPRO[pro];
-      out+=`PRO ${pro}\n`;
-      out+=`DO  ${o.DO || "-"}\n`;
-      out+=`PU  ${o.PU || "-"}\n`;
+      const o=PER_PRO[pro];
 
-      o.events.sort((a,b)=> new Date(a.time)-new Date(b.time));
+      out += `PRO ${o.PRO} | ${o.DO}\n`;
+      out += `PU: ${o.PU||"-"}\n`;
+
+      o.events.sort((a,b)=> new Date(a.time) - new Date(b.time));
 
       o.events.forEach(e=>{
-        out+=`  ${e.time} | ${e.desc}${e.user?` (${e.user})`:""}\n`;
+
+        if(e.source==="SHIP" && e.from){
+
+          out += `(${e.from} → ${e.to}) | ${e.time}`;
+          if(e.user) out+=` (${e.user})`;
+          out+="\n";
+
+        }else{
+
+          out += `Dispatched/Trip Event → ${e.time}`;
+          if(e.user) out+=` (${e.user})`;
+          out+="\n";
+
+        }
+
       });
 
-      out+="--------------------------------------------\n";
+      out += "------------------------------------------------------\n\n";
     }
 
     $("out").textContent = out || "No events found.";
     $("status").textContent="✅ Audit Complete";
 
   }catch(e){
-
     $("status").textContent="❌ Error";
     $("out").textContent=e.message;
     console.error(e);
-
   }
 }
 
-/* ---- UI ---- */
 $("run").addEventListener("click",audit);
 
 })();
