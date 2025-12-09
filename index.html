@@ -117,8 +117,10 @@ pre{
 
 <script>
 (()=>{
+/* ===========================================================
+   CONFIG
+=========================================================== */
 
-/* === CONFIG === */
 const BASE="https://fms.item.com";
 const CLIENT="FMS_WEB";
 
@@ -133,7 +135,9 @@ const $ = id => document.getElementById(id);
 let TOKEN=null;
 let timerInt=null;
 
-/* ================= AUTH ================= */
+/* ===========================================================
+   AUTH
+=========================================================== */
 async function auth(){
   if(TOKEN) return TOKEN;
 
@@ -161,7 +165,9 @@ async function auth(){
   return TOKEN;
 }
 
-/* ================= API ================= */
+/* ===========================================================
+   GENERIC API WRAPPER
+=========================================================== */
 async function api(url){
   const t = await auth();
 
@@ -178,7 +184,9 @@ async function api(url){
   return r.json();
 }
 
-/* ================= TIMER ================= */
+/* ===========================================================
+   TIMER
+=========================================================== */
 function startTimer(){
   const start=Date.now();
   timerInt=setInterval(()=>{
@@ -190,19 +198,21 @@ function stopTimer(){
   clearInterval(timerInt);
 }
 
-/* ================= STATUS PARSER ================= */
+/* ===========================================================
+   STATUS EVENT PARSER — FIXED (NO TRUNCATION)
+=========================================================== */
 function extractStatusEvent(e){
   if(!e?.event?.includes("Changed Order Status")) return null;
 
-  const short=e.event.split("].")[0] + "]";
-
-  return{
-    time:e.event_time,
-    text:short
+  return {
+    time: e.event_time,
+    text: e.event   // FULL TEXT — DO NOT SPLIT
   };
 }
 
-/* ================= DO RESOLVER ================= */
+/* ===========================================================
+   DO RESOLVER (PRO → DO)
+=========================================================== */
 async function resolveDOFromPRO(pro){
   try{
     const s=await api(SEARCH_URL+pro);
@@ -212,7 +222,9 @@ async function resolveDOFromPRO(pro){
   }
 }
 
-/* ================= MAIN AUDIT ================= */
+/* ===========================================================
+   MAIN AUDIT LOGIC
+=========================================================== */
 async function audit(){
 
   $("out").textContent="";
@@ -227,7 +239,9 @@ async function audit(){
     const tripNo=$("trip").value.trim();
     if(!tripNo) throw new Error("Trip # required");
 
-    /* ========== FETCH TASKS ========== */
+    /* -------------------------------------------------------
+       FETCH TASKS
+    ------------------------------------------------------- */
     $("status").textContent="Fetching tasks…";
     const tasks=await api(`${TASKS_URL}?tripNo=${tripNo}`);
 
@@ -243,13 +257,14 @@ async function audit(){
       };
     });
 
-    /* ========== FETCH TRIP HISTORY ========== */
+    /* -------------------------------------------------------
+       FETCH TRIP HISTORY
+    ------------------------------------------------------- */
     $("status").textContent="Fetching trip history…";
     const h=await api(`${HISTORY_URL}?tripNo=${tripNo}`);
 
     const perPRO={};
 
-    /* COLLECT ONLY DISPATCH EVENTS */
     (h?.data?.trip_history_list||[]).forEach(ev=>{
       if(!ev.event_description?.toLowerCase().includes("dispatched"))
         return;
@@ -277,46 +292,47 @@ async function audit(){
         },
         ship:null
       });
-
     });
 
-    /* ========== RESOLVE DO + MATCH CORRECT SHIPMENT EVENT ========== */
-    $("status").textContent="Resolving orders & matching shipments…";
+    /* -------------------------------------------------------
+       RESOLVE DO + MATCH NEXT SHIPMENT EVENT
+    ------------------------------------------------------- */
+    $("status").textContent="Matching shipment history…";
 
     for(const pro of Object.keys(perPRO)){
       const record=perPRO[pro];
 
       if(!record.DO){
-        record.DO=await resolveDOFromPRO(pro);
+        record.DO = await resolveDOFromPRO(pro);
       }
 
       if(!record.DO) continue;
 
-      const ship=await api(SHIP_URL+record.DO);
-      const arr=ship?.data||[];
+      const ship = await api(SHIP_URL+record.DO);
+      const arr = ship?.data || [];
 
-      /* Sort shipment timeline ascending by timestamp */
       const timeline = arr
         .map(ev => extractStatusEvent(ev))
         .filter(Boolean)
-        .sort((a,b)=> new Date(a.time) - new Date(b.time));
+        .sort((a,b)=> new Date(a.time) - new Date(b.time)); // ascending
 
-      /* Match each trip event to the NEXT shipment event */
       record.events.forEach(evt=>{
         const tripTime = new Date(evt.trip.time).getTime();
 
-        let nextEvent = timeline.find(se =>
+        // NEXT SHIPMENT EVENT ONLY
+        const next = timeline.find(se =>
           new Date(se.time).getTime() > tripTime
         );
 
-        evt.ship = nextEvent || null;
+        evt.ship = next || null;
       });
-
     }
 
-    /* ========== OUTPUT ========== */
+    /* -------------------------------------------------------
+       OUTPUT
+    ------------------------------------------------------- */
     stopTimer();
-    $("status").textContent="✅ Audit complete";
+    $("status").textContent="✔ Audit complete";
 
     let out="";
 
@@ -329,11 +345,14 @@ async function audit(){
 
       o.events.forEach(ev=>{
         out+=`  ${ev.trip.time} | ${ev.trip.text} (${ev.trip.user})\n`;
+
         if(ev.ship){
-          out+=`  ${ev.ship.time} | ${ev.ship.text}\n`;
+          // SHIPMENT EVENT: NO TIMESTAMP
+          out+=`  ${ev.ship.text}\n`;
         } else {
           out+=`  — No subsequent shipment event —\n`;
         }
+
       });
 
       out+="--------------------------------------------\n";
@@ -349,7 +368,9 @@ async function audit(){
   }
 }
 
-/* ================= UI ================= */
+/* -------------------------------------------------------
+   UI HOOK
+------------------------------------------------------- */
 $("run").addEventListener("click", audit);
 
 })();
