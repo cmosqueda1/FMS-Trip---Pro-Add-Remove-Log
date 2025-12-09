@@ -103,7 +103,7 @@ pre{
 <div class="card">
   <div class="row">
     <input id="user" placeholder="Username">
-    <input id="pass" placeholder="Password" type="password">
+    <input id="pass" type="password" placeholder="Password">
     <input id="trip" placeholder="Trip #" style="width:160px">
     <button id="run">Run Audit</button>
   </div>
@@ -128,6 +128,7 @@ const LOGIN_URL   = `${BASE}/fms-platform-user/Auth/Login`;
 const TASKS_URL   = `${BASE}/fms-platform-dispatch-management/TripDetail/GetTaskList`;
 const HISTORY_URL = `${BASE}/fms-platform-dispatch-management/Trips/GetTripHistory`;
 const SHIP_URL    = `${BASE}/fms-platform-order/shipment-order-history/`;
+const ORDER_BASIC_URL = `${BASE}/fms-platform-order/shipper/getshipment-orderbasic/`;
 const SEARCH_URL  = `${BASE}/fms-platform-dispatch-management/search-all?Keyword=`;
 
 const $ = id => document.getElementById(id);
@@ -159,18 +160,16 @@ async function auth(){
 
   const j = await r.json();
   TOKEN = j.token || j?.data?.token;
-
   if(!TOKEN) throw new Error("Token missing");
 
   return TOKEN;
 }
 
 /* ===========================================================
-   GENERIC API WRAPPER
+   API
 =========================================================== */
 async function api(url){
   const t = await auth();
-
   const r = await fetch(url,{
     headers:{
       "accept":"application/json",
@@ -179,7 +178,6 @@ async function api(url){
       "fms-token":t
     }
   });
-
   if(!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
 }
@@ -190,45 +188,63 @@ async function api(url){
 function startTimer(){
   const start=Date.now();
   timerInt=setInterval(()=>{
-    const s=((Date.now()-start)/1000).toFixed(2);
-    $("timer").textContent=`Elapsed: ${s}s`;
+    $("timer").textContent=`Elapsed: ${((Date.now()-start)/1000).toFixed(2)}s`;
   },100);
 }
-function stopTimer(){
-  clearInterval(timerInt);
-}
+function stopTimer(){ clearInterval(timerInt); }
 
 /* ===========================================================
-   STATUS EVENT PARSER — FIRST SENTENCE ONLY
+   SHIPMENT EVENT PARSER (truncate to first sentence)
 =========================================================== */
 function extractStatusEvent(e){
   if(!e?.event?.includes("Changed Order Status")) return null;
-
-  const primary = e.event.split(".")[0].trim();
-
   return {
-    time: e.event_time,
-    text: primary
+    time:e.event_time,
+    text:e.event.split(".")[0].trim()
   };
 }
 
 /* ===========================================================
-   DO LOOKUP (fallback)
+   FALLBACK: ORDERBASIC PARSER
+=========================================================== */
+function extractFallbackEvent(orderBasic, taskNo){
+  if(!orderBasic?.reference_outputs) return null;
+
+  // Find record matching task_no
+  const rec = orderBasic.reference_outputs.find(x => String(x.task_no) === String(taskNo));
+  if(!rec) return null;
+
+  // We need before/after states.
+  // reference_outputs is sorted by sequence, so sequence-1 is before-state.
+  const all = orderBasic.reference_outputs.sort((a,b)=>a.sequence - b.sequence);
+  
+  const idx = all.findIndex(x => String(x.task_no) === String(taskNo));
+  if(idx < 0) return null;
+
+  const curr = all[idx];
+  const prev = all[idx-1];
+
+  const before = prev?.status_text || "Unknown";
+  const after  = curr?.status_text || curr?.status || "Unknown";
+
+  // Build FMS-style Undispatch event
+  return `Event [PickupTaskUnDispatched] Changed Order Status From [${before}] to [${after}]`;
+}
+
+/* ===========================================================
+   DO LOOKUP
 =========================================================== */
 async function resolveDOFromPRO(pro){
   try{
     const s=await api(SEARCH_URL+pro);
     return s?.data?.orders?.[0]?.order_no || null;
-  }catch{
-    return null;
-  }
+  }catch{return null;}
 }
 
 /* ===========================================================
-   MAIN AUDIT LOGIC
+   MAIN AUDIT
 =========================================================== */
 async function audit(){
-
   $("out").textContent="";
   $("timer").textContent="";
   $("status").textContent="Starting…";
@@ -242,18 +258,17 @@ async function audit(){
     if(!tripNo) throw new Error("Trip # required");
 
     /* -------------------------------------------------------
-       FETCH TASKS (MAP OF task_no -> PRO/DO/PU)
+       FETCH TASKS
     ------------------------------------------------------- */
     $("status").textContent="Fetching tasks…";
     const tasks=await api(`${TASKS_URL}?tripNo=${tripNo}`);
 
     const MAP={};
-
     (tasks?.data||[]).forEach(t=>{
       MAP[t.task_no] = {
-        PRO: t.tracking_no || "",
-        DO:  t.shipment_order_no || t.order_no || "",
-        PU:  t.pu_no || ""
+        PRO:t.tracking_no||"",
+        DO:t.shipment_order_no||t.order_no||"",
+        PU:t.pu_no||""
       };
     });
 
@@ -265,39 +280,35 @@ async function audit(){
 
     const perPRO={};
 
-    const isDispatchEvent = desc =>
-      desc.includes("dispatch"); // catches dispatch, dispatched, undispatch, etc.
+    const isDispatchEvent = desc => desc.includes("dispatch");  
 
     (h?.data?.trip_history_list||[]).forEach(ev=>{
-
       const desc = ev.event_description?.toLowerCase() || "";
-
       if(!isDispatchEvent(desc)) return;
 
-      /* ---------------------------------------------------
-         Extract task_no if missing (Undispatch events)
-      --------------------------------------------------- */
+      // Extract TaskID if missing
       if(!ev.task_no){
         const m = ev.event_description.match(/TaskID:(\d+)/);
         if(m) ev.task_no = m[1];
       }
 
-      const task = MAP[ev.task_no] || { PRO:"", DO:"", PU:"" };
+      const task = MAP[ev.task_no] || {PRO:"",DO:"",PU:""};
 
       const pro = task.PRO;
       const doNum = task.DO;
       const puNum = task.PU;
 
       if(!perPRO[pro]){
-        perPRO[pro] = {
-          PRO: pro,
-          DO: doNum,
-          PU: puNum,
+        perPRO[pro]={
+          PRO:pro,
+          DO:doNum,
+          PU:puNum,
           events:[]
         };
       }
 
       perPRO[pro].events.push({
+        taskNo:ev.task_no,
         trip:{
           time:ev.time,
           text:ev.event_description,
@@ -308,35 +319,45 @@ async function audit(){
     });
 
     /* -------------------------------------------------------
-       MATCH SHIPMENT HISTORY FOR EACH PRO
+       MATCH SHIPMENT EVENTS + FALLBACK
     ------------------------------------------------------- */
     $("status").textContent="Matching shipment history…";
 
     for(const pro of Object.keys(perPRO)){
-      const record = perPRO[pro];
+      const record=perPRO[pro];
 
       if(!record.DO){
         record.DO = await resolveDOFromPRO(pro);
       }
-
       if(!record.DO) continue;
 
-      const ship = await api(SHIP_URL+record.DO);
-      const arr = ship?.data || [];
+      const shipData = await api(SHIP_URL+record.DO);
 
-      const timeline = arr
-        .map(ev => extractStatusEvent(ev))
+      const timeline = (shipData?.data||[])
+        .map(x=>extractStatusEvent(x))
         .filter(Boolean)
         .sort((a,b)=> new Date(a.time) - new Date(b.time));
 
-      record.events.forEach(evt=>{
+      // Load fallback data once
+      let fallbackData = null;
+
+      record.events.forEach(async evt=>{
         const tripTime = new Date(evt.trip.time).getTime();
 
         const next = timeline.find(se =>
           new Date(se.time).getTime() >= tripTime
         );
 
-        evt.ship = next || null;
+        if(next){
+          evt.ship = next;
+        } else {
+          // Need fallback from orderbasic
+          if(!fallbackData){
+            fallbackData = await api(ORDER_BASIC_URL + record.DO);
+          }
+          const fb = extractFallbackEvent(fallbackData.data, evt.taskNo);
+          if(fb) evt.ship = { text: fb };
+        }
       });
     }
 
@@ -357,7 +378,6 @@ async function audit(){
 
       o.events.forEach(ev=>{
         out+=`  ${ev.trip.time} | ${ev.trip.text} (${ev.trip.user})\n`;
-
         if(ev.ship){
           out+=`  ${ev.ship.text}\n`;
         } else {
@@ -368,7 +388,7 @@ async function audit(){
       out+="--------------------------------------------\n";
     });
 
-    $("out").textContent = out || "No matching events found.";
+    $("out").textContent = out;
 
   }catch(e){
     stopTimer();
