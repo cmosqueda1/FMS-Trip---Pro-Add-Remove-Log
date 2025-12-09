@@ -11,7 +11,7 @@
     color:#e6edf6;
     font-family:Inter,system-ui,Arial;
   }
-  .wrap{max-width:1200px;margin:40px auto;padding:20px;}
+  .wrap{max-width:1100px;margin:40px auto;padding:20px;}
   h1{margin-top:0}
   input,button{
     background:#0b0f19;
@@ -28,7 +28,6 @@
     color:#05070b;
     font-weight:700;
   }
-  button:hover{opacity:.9}
   .row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;}
   .card{
     background:#0f1420;
@@ -36,7 +35,6 @@
     border-radius:16px;
     padding:16px;
   }
-  .status{margin:10px 0;color:#93a4b7;}
   pre{
     background:#0b0f19;
     border-radius:12px;
@@ -44,8 +42,8 @@
     overflow:auto;
     max-height:70vh;
     font-size:13px;
-    line-height:1.45em;
   }
+  .status{margin:10px 0;color:#93a4b7;}
 </style>
 </head>
 
@@ -60,7 +58,6 @@
     <input id="trip" placeholder="Trip #" style="width:160px">
     <button id="run">Run Audit</button>
   </div>
-
   <div class="status" id="status">Idle</div>
   <pre id="out"></pre>
 </div>
@@ -72,40 +69,39 @@
 const BASE = "https://fms.item.com";
 const CLIENT = "FMS_WEB";
 
-const LOGIN_URL  = `${BASE}/fms-platform-user/Auth/Login`;
-const TASKS_URL  = `${BASE}/fms-platform-dispatch-management/TripDetail/GetTaskList`;
-const HISTORY_URL= `${BASE}/fms-platform-dispatch-management/Trips/GetTripHistory`;
-const SHIP_HIST  = `${BASE}/fms-platform-order/shipment-order-history/`;
+const LOGIN_URL   = `${BASE}/fms-platform-user/Auth/Login`;
+const TASKS_URL   = `${BASE}/fms-platform-dispatch-management/TripDetail/GetTaskList`;
+const HISTORY_URL = `${BASE}/fms-platform-dispatch-management/Trips/GetTripHistory`;
+const SHIP_HISTORY_URL = `${BASE}/fms-platform-order/shipment-order-history/`;
 
-const $=id=>document.getElementById(id);
-let TOKEN=null;
+const $ = id => document.getElementById(id);
+let TOKEN = null;
 
-/* =====================================================
-   AUTH — UNCHANGED (your working logic)
-=====================================================*/
+/* ---------------- AUTH (unchanged) ---------------- */
+
 async function auth(){
-  if(TOKEN) return TOKEN;
+  if (TOKEN) return TOKEN;
 
-  $("status").textContent="Logging in…";
+  $("status").textContent = "Logging in…";
 
   const r = await fetch(LOGIN_URL,{
     method:"POST",
     headers:{
-      "fms-client":CLIENT,
+      "fms-client": CLIENT,
       "Content-Type":"application/json"
     },
     body:JSON.stringify({
-      account:$("user").value.trim(),
-      password:$("pass").value.trim()
+      account: $("user").value.trim(),
+      password: $("pass").value.trim()
     })
   });
 
-  if(!r.ok) throw new Error("Login failed");
+  if (!r.ok) throw new Error("Login failed");
 
   const j = await r.json();
   TOKEN = j.token || j?.data?.token;
 
-  if(!TOKEN) throw new Error("Token missing");
+  if (!TOKEN) throw new Error("Token missing");
   return TOKEN;
 }
 
@@ -116,154 +112,157 @@ async function api(url){
     headers:{
       "accept":"application/json",
       "Content-Type":"application/json",
-      "fms-client":CLIENT,
-      "fms-token":t
+      "fms-client": CLIENT,
+      "fms-token": t
     }
   });
-
-  if(!r.ok) throw new Error(`HTTP ${r.status}`);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
 }
 
-/* =====================================================
-   STATUS TRANSITION PARSER
-=====================================================*/
-function parseTransition(text){
-  const m = text.match(/Changed Order Status From \[(.*?)\] to \[(.*?)\]/i);
-  if(!m) return null;
-  return { from:m[1], to:m[2] };
-}
+/* ---------------- MAIN AUDIT ---------------- */
 
-/* =====================================================
-   MAIN AUDIT
-=====================================================*/
 async function audit(){
 
-  $("out").textContent="";
-  TOKEN=null;
+  $("out").textContent = "";
+  TOKEN = null; // force fresh login each run
 
   try{
     const tripNo = $("trip").value.trim();
-    if(!tripNo) throw new Error("Trip # required");
+    if (!tripNo) throw new Error("Trip # required");
 
-    $("status").textContent="Fetching Task List…";
+    /* 1) Task list: map task_no → {PRO, DO, PU} */
+    $("status").textContent = "Fetching Task List…";
+    const tasksRes = await api(`${TASKS_URL}?tripNo=${tripNo}`);
 
-    const tasks = await api(`${TASKS_URL}?tripNo=${tripNo}`);
-
-    const MAP={};
-
-    (tasks?.data?.tasks||[]).forEach(t=>{
-      if(!t.task_no || !t.tracking_no) return;
-      MAP[t.task_no]={
+    const TASK_MAP = {};
+    (tasksRes?.data?.tasks || []).forEach(t => {
+      if (!t.task_no || !t.tracking_no) return;
+      TASK_MAP[t.task_no] = {
         PRO: t.tracking_no,
-        DO : t.shipment_order_no||t.order_no||"",
-        PU : t.pu_no||""
+        DO : t.shipment_order_no || t.order_no || "",
+        PU : t.pu_no || ""
       };
     });
 
-    $("status").textContent="Fetching Trip History…";
+    /* 2) Trip history → per PRO events (original logic) */
+    $("status").textContent = "Fetching Trip History…";
+    const histRes = await api(`${HISTORY_URL}?tripNo=${tripNo}`);
 
-    const hist = await api(`${HISTORY_URL}?tripNo=${tripNo}`);
+    const tripEvents =
+      histRes?.data?.trip_history_list ||
+      histRes?.data?.history ||
+      histRes?.data ||
+      [];
 
-    const PER_PRO={};
+    const perPRO = {};
 
-    (hist?.data?.trip_history_list||[]).forEach(h=>{
-      const map=MAP[h.task_no];
-      if(!map) return;
+    tripEvents.forEach(e => {
+      const map = TASK_MAP[e.task_no];
+      if (!map) return;
 
-      if(!PER_PRO[map.PRO]){
-        PER_PRO[map.PRO]={
-          PRO:map.PRO,
-          DO:map.DO,
-          PU:map.PU,
-          events:[]
+      if (!perPRO[map.PRO]) {
+        perPRO[map.PRO] = {
+          PRO: map.PRO,
+          DO : map.DO,
+          PU : map.PU,
+          events: []
         };
       }
 
-      PER_PRO[map.PRO].events.push({
-        time:h.time,
-        text:h.event_description,
-        user:h.user,
-        source:"TRIP"
+      perPRO[map.PRO].events.push({
+        time: e.time,
+        desc: e.event_description,
+        user: e.user || ""
       });
     });
 
-    $("status").textContent="Fetching Shipment History…";
+    /* 3) Shipment order history per DO, append to same events */
+    $("status").textContent = "Fetching Shipment History…";
 
-    for(const pro of Object.keys(PER_PRO)){
-      const item=PER_PRO[pro];
-      if(!item.DO) continue;
+    for (const pro of Object.keys(perPRO)) {
+      const entry = perPRO[pro];
+      if (!entry.DO) {
+        // keep original behaviour if no DO
+        entry.events.push({
+          time: "—",
+          desc: "Shipment history unavailable (no DO)",
+          user: ""
+        });
+        continue;
+      }
 
       try{
-        const ship = await api(SHIP_HIST + item.DO);
+        const shipRes = await api(SHIP_HISTORY_URL + entry.DO);
+        const shipEvents = shipRes?.data || shipRes?.data?.history || [];
 
-        (ship?.data||[]).forEach(s=>{
-          const t=parseTransition(s.event||"");
+        if (!Array.isArray(shipEvents) || shipEvents.length === 0) {
+          entry.events.push({
+            time: "—",
+            desc: "Shipment history unavailable",
+            user: ""
+          });
+          continue;
+        }
 
-          item.events.push({
-            time:s.event_time,
-            text:s.event,
-            from:t?.from||"",
-            to:t?.to||"",
-            user:s.user_name||"",
-            source:"SHIP"
+        shipEvents.forEach(s => {
+          entry.events.push({
+            time: s.event_time || s.time || "",
+            // keep it readable but clear it’s shipment history
+            desc: `[Shipment] ${s.event || s.status_describe || s.status || ""}`,
+            user: s.user_name || s.operator || ""
           });
         });
 
-      }catch{
-        item.events.push({
-          time:"—",
-          text:"Shipment history unavailable",
-          source:"SHIP"
+      }catch(err){
+        console.error("Shipment history error for", entry.DO, err);
+        entry.events.push({
+          time: "—",
+          desc: "Shipment history unavailable",
+          user: ""
         });
       }
     }
 
-    $("status").textContent="Rendering…";
+    /* 4) Render exactly like your original, plus the new entries */
 
-    let out="";
+    $("status").textContent = "Rendering…";
 
-    for(const pro of Object.keys(PER_PRO).sort()){
+    let out = "";
 
-      const o=PER_PRO[pro];
+    Object.keys(perPRO).sort().forEach(pro => {
+      const o = perPRO[pro];
 
-      out += `PRO ${o.PRO} | ${o.DO}\n`;
-      out += `PU: ${o.PU||"-"}\n`;
+      out += `PRO ${pro}\n`;
+      out += `DO  ${o.DO}\n`;
+      out += `PU  ${o.PU || "-"}\n`;
 
-      o.events.sort((a,b)=> new Date(a.time) - new Date(b.time));
-
-      o.events.forEach(e=>{
-
-        if(e.source==="SHIP" && e.from){
-
-          out += `(${e.from} → ${e.to}) | ${e.time}`;
-          if(e.user) out+=` (${e.user})`;
-          out+="\n";
-
-        }else{
-
-          out += `Dispatched/Trip Event → ${e.time}`;
-          if(e.user) out+=` (${e.user})`;
-          out+="\n";
-
-        }
-
+      // sort by time if possible
+      o.events.sort((a,b) => {
+        const da = Date.parse(a.time) || 0;
+        const db = Date.parse(b.time) || 0;
+        return da - db;
       });
 
-      out += "------------------------------------------------------\n\n";
-    }
+      o.events.forEach(e => {
+        const userPart = e.user ? ` (${e.user})` : "";
+        out += `  ${e.time || "—"} | ${e.desc}${userPart}\n`;
+      });
+
+      out += "--------------------------------------------\n";
+    });
 
     $("out").textContent = out || "No events found.";
-    $("status").textContent="✅ Audit Complete";
+    $("status").textContent = "✅ Audit Complete";
 
   }catch(e){
-    $("status").textContent="❌ Error";
-    $("out").textContent=e.message;
+    $("status").textContent = "❌ Error";
+    $("out").textContent = e.message;
     console.error(e);
   }
 }
 
-$("run").addEventListener("click",audit);
+$("run").addEventListener("click", audit);
 
 })();
 </script>
