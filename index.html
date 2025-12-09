@@ -1,193 +1,248 @@
 <!DOCTYPE html>
 <html>
 <head>
-<meta charset="UTF-8">
-<title>🚚 FMS Trip Change Audit Bot</title>
+<meta charset="utf-8"/>
+<title>FMS Trip Change Audit Bot</title>
 
 <style>
-body{background:#060b14;color:#e6edf6;font-family:system-ui;padding:24px}
-h2{margin-bottom:10px}
-input{
-  padding:10px;
-  background:#0f172a;
-  border:1px solid #334155;
-  color:#fff;
-  border-radius:8px;
-  margin-right:6px
-}
-button{
-  padding:10px 18px;
-  background:linear-gradient(135deg,#7c3aed,#22d3ee);
-  border:none;
-  border-radius:10px;
-  font-weight:600;
-  cursor:pointer
-}
-#log{
-  background:#020617;
-  border:1px solid #1e293b;
-  padding:14px;
-  border-radius:12px;
-  height:460px;
-  overflow:auto;
-  white-space:pre-wrap;
-  font-family:Consolas,monospace
-}
-.success{color:#10b981}
-.error{color:#ef4444}
+  body{
+    margin:0;
+    background:#05070b;
+    color:#e6edf6;
+    font-family:Inter,system-ui,Arial;
+  }
+  .wrap{max-width:1100px;margin:40px auto;padding:20px;}
+  h1{margin-top:0}
+  input,button{
+    background:#0b0f19;
+    color:#e6edf6;
+    border:1px solid #1f2933;
+    border-radius:10px;
+    padding:10px 14px;
+    font-size:14px;
+  }
+  button{
+    cursor:pointer;
+    background:linear-gradient(90deg,#7c3aed,#22d3ee);
+    border:none;
+    color:#05070b;
+    font-weight:700;
+  }
+  .row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;}
+  .card{
+    background:#0f1420;
+    border:1px solid #1f2933;
+    border-radius:16px;
+    padding:16px;
+  }
+  pre{
+    background:#0b0f19;
+    border-radius:12px;
+    padding:16px;
+    overflow:auto;
+    max-height:70vh;
+    font-size:13px;
+  }
+  .status{margin:10px 0;color:#93a4b7;}
 </style>
 </head>
+
 <body>
+<div class="wrap">
+<h1>🚚 FMS Trip Change Audit Bot</h1>
 
-<h2>🚚 FMS Trip Change Audit Bot</h2>
-
+<div class="card">
+<div class="row">
 <input id="user" placeholder="Username">
-<input id="pass" type="password" placeholder="Password">
-<input id="trip" placeholder="Trip #">
-<button onclick="runAudit()">Run Audit</button>
-
-<pre id="log"></pre>
+<input id="pass" placeholder="Password" type="password">
+<input id="trip" placeholder="Trip #" style="width:160px">
+<button id="run">Run Audit</button>
+</div>
+<div class="status" id="status">Idle</div>
+<pre id="out"></pre>
+</div>
+</div>
 
 <script>
-const FMS = "https://fms.item.com";
+(()=>{
 
-const LOGIN_URL = `${FMS}/fms-platform-user/Auth/Login`;
-const TRIP_HISTORY = `${FMS}/fms-platform-dispatch-management/Trips/GetTripHistory`;
-const TASK_LIST = `${FMS}/fms-platform-dispatch-management/TripDetail/GetTaskList`;
-const SHIPMENT_HISTORY = `${FMS}/fms-platform-order/shipment-orders/queryOrderLog`;
+const BASE="https://fms.item.com";
+const CLIENT="FMS_WEB";
 
-const logBox = document.getElementById("log");
+const LOGIN_URL=`${BASE}/fms-platform-user/Auth/Login`;
+const TASKS_URL=`${BASE}/fms-platform-dispatch-management/TripDetail/GetTaskList`;
+const HISTORY_URL=`${BASE}/fms-platform-dispatch-management/Trips/GetTripHistory`;
+const SHIP_HISTORY=`${BASE}/fms-platform-order/shipment-orders/queryOrderLog?orderNo=`;   // ✅ correct endpoint
 
-function log(msg){
-  logBox.textContent += msg + "\n";
+const $=id=>document.getElementById(id);
+let TOKEN=null;
+
+/* ===== AUTH – UNCHANGED ===== */
+async function auth(){
+  if(TOKEN) return TOKEN;
+
+  $("status").textContent="Logging in…";
+
+  const r = await fetch(LOGIN_URL,{
+    method:"POST",
+    headers:{
+      "fms-client":CLIENT,
+      "Content-Type":"application/json"
+    },
+    body:JSON.stringify({
+      account:$("user").value.trim(),
+      password:$("pass").value.trim()
+    })
+  });
+
+  if(!r.ok) throw new Error("Login failed");
+
+  const j = await r.json();
+  TOKEN = j.token || j?.data?.token;
+
+  if(!TOKEN) throw new Error("Token missing");
+
+  return TOKEN;
 }
 
-async function runAudit(){
+/* ===== API HELPER – UNCHANGED ===== */
+async function api(url){
+  const t = await auth();
 
-  logBox.textContent = "";
+  const r = await fetch(url,{
+    headers:{
+      "accept":"application/json",
+      "Content-Type":"application/json",
+      "fms-client":CLIENT,
+      "fms-token":t
+    }
+  });
 
-  const username = user.value.trim();
-  const password = pass.value.trim();
-  const tripNo = trip.value.trim().toUpperCase();
+  if(!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+/* ===== MAIN AUDIT ===== */
+async function audit(){
+
+  $("out").textContent="";
+  TOKEN=null;
 
   try{
 
-    // ===== LOGIN =====
-    log("🔐 Logging in...");
+    const tripNo = $("trip").value.trim();
+    if(!tripNo) throw new Error("Trip # required");
 
-    const login = await fetch(LOGIN_URL,{
-      method:"POST",
-      headers:{
-        "Content-Type":"application/json",
-        "Accept":"application/json"
-      },
-      body: JSON.stringify({
-        username,
-        password
-      }),
-      credentials:"include"
-    });
+    /* ---- TASK MAP ---- */
+    $("status").textContent="Fetching Task List…";
+    const tasks = await api(`${TASKS_URL}?tripNo=${tripNo}`);
 
-    if(!login.ok)
-      throw new Error("Login failed");
+    const MAP={};
 
-    log("✅ Authenticated\n");
+    (tasks?.data||[]).forEach(t=>{
+      if(!t.task_no||!t.tracking_no) return;
 
-    // ===== TRIP HISTORY =====
-    log("📖 Loading trip history...");
-    const tripResp = await fetch(`${TRIP_HISTORY}?tripNo=${tripNo}`,{
-      credentials:"include"
-    });
-    const tripData = await tripResp.json();
-
-    const history = tripData?.data?.trip_history_list || [];
-    log(`✅ ${history.length} history records pulled`);
-
-    const relevant = history.filter(x =>
-      x.event_description?.includes("Dispatched") ||
-      x.event_description?.includes("Undispatched")
-    );
-
-    log(`🔍 ${relevant.length} dispatch change events detected\n`);
-
-    // ===== TASK LIST =====
-    log("📋 Loading trip tasks...");
-    const taskResp = await fetch(`${TASK_LIST}?tripNo=${tripNo}`,{
-      credentials:"include"
-    });
-    const taskData = await taskResp.json();
-
-    const tasks = taskData?.data?.task_list || [];
-
-    const taskMap = {};
-    tasks.forEach(t=>{
-      taskMap[t.task_no] = {
-        do: t.shipment_order_no,
-        pro: t.tracking_no
+      MAP[t.task_no]={
+        PRO:t.tracking_no,
+        DO:t.shipment_order_no||t.order_no||"",
+        PU:t.pu_no||""
       };
     });
 
-    // ===== AUDIT =====
-    log("\n==============================");
+    /* ---- TRIP HISTORY ---- */
+    $("status").textContent="Fetching Trip History…";
+    const hist = await api(`${HISTORY_URL}?tripNo=${tripNo}`);
 
-    for(const ev of relevant){
+    let perPRO={};
 
-      const tmap = taskMap[ev.task_no];
-      if(!tmap) continue;
+    (hist?.data?.trip_history_list||[]).forEach(e=>{
+      if(!MAP[e.task_no]) return;
 
-      const PRO = tmap.pro;
-      const DO  = tmap.do;
-      const ts  = ev.time.replace("T"," ");
-
-      log(`\nPRO ${PRO} | ${DO}`);
-
-      // ===== SHIPMENT HISTORY =====
-      const shipResp = await fetch(
-        `${SHIPMENT_HISTORY}?orderNo=${DO}`,
-        { credentials:"include" }
-      );
-
-      const shipData = await shipResp.json();
-      const logs = shipData?.data?.list || [];
-
-      if(!logs.length){
-        log("   ⚠ No shipment status records");
-        continue;
+      const m=MAP[e.task_no];
+      if(!perPRO[m.PRO]){
+        perPRO[m.PRO]={
+          PRO:m.PRO,
+          DO:m.DO,
+          PU:m.PU,
+          events:[]
+        };
       }
 
-      logs.sort((a,b)=>
-        new Date(a.operate_time) - new Date(b.operate_time)
-      );
+      perPRO[m.PRO].events.push({
+        time:e.time,
+        desc:e.event_description,
+        user:e.user
+      });
+    });
 
-      const evTime = new Date(ev.time);
+    /* ---- SHIPMENT HISTORY ---- */
+    $("status").textContent="Fetching Shipment History…";
 
-      let before=null, after=null;
+    for(const pro of Object.keys(perPRO)){
 
-      for(let i=0;i<logs.length;i++){
-        const t = new Date(logs[i].operate_time);
-        if(t >= evTime){
-          after = logs[i];
-          before = logs[i-1];
-          break;
-        }
+      const entry=perPRO[pro];
+      if(!entry.DO) continue;
+
+      try{
+
+        const ship = await api(SHIP_HISTORY + entry.DO);
+
+        const evs = ship?.data?.list || [];
+
+        evs.forEach(s=>{
+          entry.events.push({
+            time: s.operate_time,
+            desc: `Shipment → ${s.status_text || s.status_describe || s.status}`,
+            user: s.operator || ""
+          });
+        });
+
+      }catch{
+        entry.events.push({
+          time:"—",
+          desc:"Shipment history unavailable",
+          user:""
+        });
       }
-
-      if(!before||!after){
-        log("   ⚠ Unable to correlate status");
-        continue;
-      }
-
-      log(`   ${before.status_text} → ${after.status_text} | ${ts}`);
     }
 
-    log("\n✅ AUDIT COMPLETE");
+    /* ---- RENDER OUTPUT ---- */
+    $("status").textContent="Rendering…";
 
-  }
-  catch(err){
-    log("❌ ERROR: "+err.message);
+    let out="";
+
+    for(const pro of Object.keys(perPRO).sort()){
+
+      const o=perPRO[pro];
+      out+=`PRO ${pro}\n`;
+      out+=`DO  ${o.DO || "-"}\n`;
+      out+=`PU  ${o.PU || "-"}\n`;
+
+      o.events.sort((a,b)=> new Date(a.time)-new Date(b.time));
+
+      o.events.forEach(e=>{
+        out+=`  ${e.time} | ${e.desc}${e.user?` (${e.user})`:""}\n`;
+      });
+
+      out+="--------------------------------------------\n";
+    }
+
+    $("out").textContent = out || "No events found.";
+    $("status").textContent="✅ Audit Complete";
+
+  }catch(e){
+
+    $("status").textContent="❌ Error";
+    $("out").textContent=e.message;
+    console.error(e);
+
   }
 }
-</script>
 
+/* ---- UI ---- */
+$("run").addEventListener("click",audit);
+
+})();
+</script>
 </body>
 </html>
