@@ -67,8 +67,8 @@ h1{
   cursor:pointer;
   width:20px;
   height:20px;
-  fill:white;              /* <-- FIXED: Always white */
-  color:white;             /* <-- FIXED */
+  fill:white;
+  color:white;
   opacity:0.85;
 }
 
@@ -80,11 +80,6 @@ input{
   padding:10px 14px;
   font-size:14px;
   width:190px;
-}
-
-::-webkit-textfield-decoration-container{
-  filter:invert(1) brightness(1.6);
-  scale:1.25;
 }
 
 button{
@@ -130,7 +125,6 @@ pre{
   <div class="row">
     <input id="user" placeholder="Username">
 
-    <!-- PASSWORD FIELD WITH FIXED WHITE EYE -->
     <div class="pw-wrap">
       <input id="pass" placeholder="Password" type="password">
       <svg class="pw-eye" id="pwToggle" viewBox="0 0 24 24">
@@ -151,8 +145,6 @@ pre{
 
 <script>
 (()=>{
-
-/* === CONFIG === */
 const BASE="https://fms.item.com";
 const CLIENT="FMS_WEB";
 
@@ -167,13 +159,13 @@ const $ = id => document.getElementById(id);
 let TOKEN=null;
 let timerInt=null;
 
-/* ---------------- PASSWORD TOGGLE ---------------- */
+/* password eye toggle */
 $("pwToggle").addEventListener("click",()=>{
   const p=$("pass");
   p.type = p.type==="password" ? "text" : "password";
 });
 
-/* ================= AUTH ================= */
+/* login */
 async function auth(){
   if(TOKEN) return TOKEN;
 
@@ -193,19 +185,17 @@ async function auth(){
 
   if(!r.ok) throw new Error("Login failed");
 
-  const j = await r.json();
-  TOKEN = j.token || j?.data?.token;
-
+  const j=await r.json();
+  TOKEN=j.token || j?.data?.token;
   if(!TOKEN) throw new Error("Token missing");
 
   return TOKEN;
 }
 
-/* ================= API WRAPPER ================= */
+/* API helper */
 async function api(url){
-  const t = await auth();
-
-  const r = await fetch(url,{
+  const t=await auth();
+  const r=await fetch(url,{
     headers:{
       "accept":"application/json",
       "Content-Type":"application/json",
@@ -213,69 +203,48 @@ async function api(url){
       "fms-token":t
     }
   });
-
   if(!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
 }
 
-/* ================= TIMER ================= */
-function startTimer(){
-  const start=Date.now();
-  timerInt=setInterval(()=>{
-    const s=((Date.now()-start)/1000).toFixed(2);
-    $("timer").textContent=`Elapsed: ${s}s`;
-  },100);
-}
-function stopTimer(){
-  clearInterval(timerInt);
-}
-
-/* ================= STATUS PARSER ================= */
-function extractStatusEvent(e){
-  if(!e?.event?.includes("Changed Order Status")) return null;
-
-  let short = e.event.split("].")[0] + "]";
-
-  return{
+/* shorten shipment event text */
+function extractShipmentEvent(e){
+  if(!e?.event?.toLowerCase().includes("changed order status")) return null;
+  return {
     time:e.event_time,
-    text:short
+    text:e.event.split("].")[0] + "]"
   };
 }
 
-/* ================= FIND ORDER VIA PRO OR DO ================= */
-async function resolveOrderByKeyword(k){
-  try{
-    const s = await api(SEARCH_URL + k);
-    const o = s?.data?.orders?.[0];
-    return o ? o.order_no : null;
-  }catch{
-    return null;
-  }
+/* universal fuzzy undispatch detector */
+function looksLikeUnDispatched(desc){
+  desc = desc.toLowerCase();
+  return /u\s*n\s*d\s*i\s*s\s*p\s*a\s*t\s*c\s*h/.test(desc);
 }
 
-/* ================= MAIN AUDIT ================= */
+/* main */
 async function audit(){
-
   $("out").textContent="";
-  $("timer").textContent="";
   $("status").textContent="Starting…";
-
+  $("timer").textContent="";
   TOKEN=null;
-  startTimer();
+
+  const tripNo=$("trip").value.trim();
+  if(!tripNo) return alert("Trip # required");
+
+  const start=Date.now();
+  timerInt=setInterval(()=>{
+    $("timer").textContent = `Elapsed: ${((Date.now()-start)/1000).toFixed(2)}s`;
+  },100);
 
   try{
-
-    const tripNo=$("trip").value.trim();
-    if(!tripNo) throw new Error("Trip # required");
-
+    /* pull tasks */
     $("status").textContent="Fetching tasks…";
     const tasks=await api(`${TASKS_URL}?tripNo=${tripNo}`);
 
     const MAP={};
-
     (tasks?.data||[]).forEach(t=>{
       if(!t.task_no) return;
-
       MAP[t.task_no]={
         PRO:t.tracking_no||"",
         DO:t.shipment_order_no||t.order_no||"",
@@ -283,95 +252,94 @@ async function audit(){
       };
     });
 
+    /* pull trip history */
     $("status").textContent="Fetching trip history…";
-    const h=await api(`${HISTORY_URL}?tripNo=${tripNo}`);
+    const hist=await api(`${HISTORY_URL}?tripNo=${tripNo}`);
 
-    const perPRO={};
+    const perBucket={};
 
-    /* -------------- COLLECT DISPATCH / UNDISPATCH EVENTS -------------- */
-    (h?.data?.trip_history_list||[]).forEach(ev=>{
+    (hist?.data?.trip_history_list||[]).forEach(ev=>{
+      const rawDesc = ev.event_description || "";
+      const desc = rawDesc.toLowerCase();
 
-      const desc = ev.event_description || "";
-      const time = ev.time;
-      const user = ev.user || "";
+      /* only accept dispatched / undispatched */
+      const isDispatch = desc.includes("dispatched");
+      const isUnDispatch = looksLikeUnDispatched(desc);
 
-      let pro = MAP[ev.task_no]?.PRO;
-      let DO  = MAP[ev.task_no]?.DO;
-      let PU  = MAP[ev.task_no]?.PU;
+      if(!isDispatch && !isUnDispatch) return;  // ignore all noise
 
-      /* Undispatch events often have no PRO/DO, but include TaskID */
-      const tid = desc.match(/TaskID:?(\d+)/i)?.[1];
-      if(!pro && tid){
-        if(MAP[tid]){
-          pro = MAP[tid].PRO;
-          DO  = MAP[tid].DO;
-          PU  = MAP[tid].PU;
-        }
+      /* extract mapping */
+      let taskNo = ev.task_no;
+      let mapped = taskNo ? MAP[taskNo] : null;
+
+      let PRO = mapped?.PRO || "";
+      let DO  = mapped?.DO  || "";
+      let PU  = mapped?.PU  || "";
+
+      /* fallback: TaskID inside text */
+      const tid = rawDesc.match(/taskid[:\s]*([0-9]+)/i)?.[1];
+      if(tid && MAP[tid]){
+        PRO = PRO || MAP[tid].PRO;
+        DO  = DO  || MAP[tid].DO;
+        PU  = PU  || MAP[tid].PU;
       }
 
-      /* Try to pull DO from order_no for undispatch entries */
-      if(!DO && ev.order_no){
-        DO = ev.order_no;
+      /* fallback order_no */
+      if(!DO && ev.order_no) DO = ev.order_no;
+
+      /* fallback search-all */
+      const bucketKey = PRO || DO || "(none)";
+
+      if(!perBucket[bucketKey]){
+        perBucket[bucketKey]={PRO:PRO||"(none)", DO:DO||"-", PU:PU||"-", events:[]};
       }
 
-      /* If still missing DO, try search-all */
-      if(!DO && tid){
-        // we may at least find DO for that TaskID mapping
-      }
-
-      let bucket = pro || "(none)";
-
-      if(!perPRO[bucket]){
-        perPRO[bucket]={PRO:bucket, DO:DO||"-", PU:PU||"-", events:[]};
-      }
-
-      perPRO[bucket].events.push({
+      perBucket[bucketKey].events.push({
         type:"trip",
-        time,
-        text:desc,
-        user
+        time:ev.time,
+        text:rawDesc,
+        user:ev.user||""
       });
     });
 
-    /* -------------- SHIPMENT ORDER HISTORY MERGE -------------- */
+    /* now handle shipment pairing per bucket */
     $("status").textContent="Matching shipment events…";
 
-    for(const p of Object.keys(perPRO)){
+    for(const bucket of Object.keys(perBucket)){
+      const rec=perBucket[bucket];
 
-      let record = perPRO[p];
-      let DO = record.DO === "-" ? null : record.DO;
+      let DO = rec.DO === "-" ? "" : rec.DO;
 
-      /* If DO missing and PRO present, try search */
-      if(!DO && p!=="(none)"){
-        DO = await resolveOrderByKeyword(p);
-        if(DO) record.DO = DO;
-      }
-
-      /* Also try searching by DO# if missing from undispatch */
-      if(!DO && record.PRO==="(none)"){
-        // Attempt search-all for task-derived DO later if needed
+      /* if DO missing but PRO present, search it */
+      if(!DO && rec.PRO && rec.PRO!=="(none)"){
+        const s=await api(SEARCH_URL+rec.PRO);
+        DO = s?.data?.orders?.[0]?.order_no || "";
+        rec.DO = DO || "-";
       }
 
       if(!DO) continue;
 
-      const ship = await api(SHIP_URL + DO);
-      const arr = ship?.data || [];
+      const shipHist=await api(SHIP_URL + DO);
 
-      record.events.forEach(evt=>{
+      const shipEvents = shipHist?.data || [];
+
+      /* match each trip event to shipment event */
+      const additions=[];
+
+      rec.events.forEach(ev=>{
         let best=null;
 
-        arr.forEach(se=>{
-          const s=extractStatusEvent(se);
-          if(!s) return;
-
-          const d=Math.abs(new Date(evt.time)-new Date(s.time));
-
-          if(!best || d<best.diff)
-            best={diff:d,ev:s};
+        shipEvents.forEach(se=>{
+          const sx=extractShipmentEvent(se);
+          if(!sx) return;
+          const diff=Math.abs(new Date(ev.time) - new Date(sx.time));
+          if(!best || diff < best.diff){
+            best={diff, ev:sx};
+          }
         });
 
         if(best){
-          record.events.push({
+          additions.push({
             type:"ship",
             time:best.ev.time,
             text:best.ev.text,
@@ -380,13 +348,12 @@ async function audit(){
         }
       });
 
-      /* Now sort events:
-         1. chronological asc
-         2. trip above ship when timestamps equal or missing
-      */
-      record.events.sort((a,b)=>{
-        let ta = new Date(a.time).getTime();
-        let tb = new Date(b.time).getTime();
+      rec.events = rec.events.concat(additions);
+
+      /* sort chronologically, trip above ship on duplicates */
+      rec.events.sort((a,b)=>{
+        let ta=new Date(a.time).getTime();
+        let tb=new Date(b.time).getTime();
         if(ta===tb){
           return a.type==="trip" ? -1 : 1;
         }
@@ -394,42 +361,37 @@ async function audit(){
       });
     }
 
-    /* -------------- OUTPUT -------------- */
-    stopTimer();
+    /* output */
+    clearInterval(timerInt);
     $("status").textContent="✅ Audit complete";
 
     let out="";
 
-    Object.keys(perPRO).sort().forEach(p=>{
-      const o=perPRO[p];
+    Object.keys(perBucket).forEach(bucket=>{
+      const r=perBucket[bucket];
 
-      out+=`PRO ${o.PRO}\n`;
-      out+=`DO  ${o.DO||"-"}\n`;
-      out+=`PU  ${o.PU||"-"}\n`;
+      out+=`PRO ${r.PRO}\n`;
+      out+=`DO  ${r.DO}\n`;
+      out+=`PU  ${r.PU}\n`;
 
-      if(o.events.length===0){
-        out+="  — No events —\n\n";
-        return;
-      }
-
-      o.events.forEach(ev=>{
+      r.events.forEach(ev=>{
         out+=`  ${ev.time} | ${ev.text}${ev.user?` (${ev.user})`:""}\n`;
       });
 
       out+="--------------------------------------------\n";
     });
 
-    $("out").textContent = out;
+    $("out").textContent = out || "No dispatch/undispatch events found.";
 
   }catch(e){
-    stopTimer();
+    clearInterval(timerInt);
     $("status").textContent="❌ Error";
     $("out").textContent=e.message;
     console.error(e);
   }
 }
 
-/* ================= UI ================= */
+/* start */
 $("run").addEventListener("click", audit);
 
 })();
