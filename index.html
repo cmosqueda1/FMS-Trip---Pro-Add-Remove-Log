@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>FMS Trip History Audit Bot</title>
+
+<style>
+:root{
+  --bg:#0a0c10;
+  --card:#121827;
+  --text:#e6edf6;
+  --muted:#9aa3b2;
+  --accent:#7c3aed;
+  --good:#10b981;
+  --warn:#facc15;
+  --bad:#ef4444;
+  --border:#1f2a3a;
+}
+
+body{
+  margin:0;
+  background:linear-gradient(120deg,#080b13,#0c1324);
+  color:var(--text);
+  font-family:system-ui,Segoe UI,Inter,sans-serif;
+  padding:24px;
+}
+
+input,button{
+  padding:8px 12px;
+  border-radius:8px;
+  border:1px solid var(--border);
+  background:#0f1420;
+  color:var(--text);
+}
+
+button{
+  background:linear-gradient(135deg,#7c3aed,#4f46e5);
+  cursor:pointer;
+  border:none;
+  margin-left:4px;
+}
+
+pre{
+  background:var(--card);
+  border-radius:10px;
+  padding:12px;
+  white-space:pre-wrap;
+  box-shadow:0 0 0 1px var(--border) inset;
+  min-height:350px;
+}
+
+h2{
+  margin-top:0;
+}
+
+.section{
+  margin-bottom:10px;
+}
+
+.small{
+  color:var(--muted);
+}
+
+</style>
+</head>
+<body>
+
+<h2>🚚 FMS Trip Change Audit Bot</h2>
+
+<div class="section">
+  <input id="user" placeholder="FMS Username" />
+  <input id="pass" type="password" placeholder="Password" />
+</div>
+
+<div class="section">
+  <input id="trip" placeholder="Trip #" />
+  <button onclick="run()">Run Audit</button>
+</div>
+
+<pre id="out">Ready.</pre>
+
+<script>
+const BASE = "https://fms.item.com";
+
+const LOGIN_URL =
+  `${BASE}/fms-platform-user/Auth/Login`;
+
+const TRIP_HISTORY_URL =
+  `${BASE}/fms-platform-dispatch-management/Trips/GetTripHistory`;
+
+const SHIPMENT_HISTORY_URL =
+  `${BASE}/fms-platform-order/shipment-order-history`;
+
+const out = document.getElementById("out");
+const write = t => out.textContent += t + "\n";
+
+const ts = t => new Date(t).getTime();
+
+/*******************
+ LOGIN
+*******************/
+async function login(u,p){
+  write("🔐 Logging in...");
+
+  const r = await fetch(LOGIN_URL,{
+      method:"POST",
+      credentials:"include",
+      headers:{
+          "Content-Type":"application/json"
+      },
+      body:JSON.stringify({
+          username:u,
+          password:p
+      })
+  });
+
+  if(!r.ok) throw("Login failed");
+
+  write("✅ Authenticated");
+  write("");
+}
+
+/*******************
+ FETCH TRIP HISTORY
+*******************/
+async function fetchTrip(trip){
+  write("📥 Fetching trip history...");
+
+  const r = await fetch(`${TRIP_HISTORY_URL}?tripNo=${trip}`,{
+     method:"GET",
+     credentials:"include"
+  });
+
+  const j = await r.json();
+  return j?.data?.trip_history_list || [];
+}
+
+/*******************
+ PARSERS
+*******************/
+function extractPRO(row){
+  if(row.tracking_no) return row.tracking_no;
+
+  const m = row.event_description.match(/PRO#\s*(\d+)/i);
+  return m ? m[1] : null;
+}
+
+function extractDO(text){
+  const m = text.match(/DO(\d+)/i);
+  return m ? "DO" + m[1] : null;
+}
+
+function eventType(desc){
+
+  if(desc.includes("Dispatched DO PRO#"))
+      return "Dispatch → Added to Trip";
+
+  if(desc.toLowerCase().includes("undispatch") ||
+     desc.toLowerCase().includes("removed"))
+      return "Undispatch → Removed from Trip";
+
+  if(desc.toLowerCase().includes("linehaul"))
+      return "Linehaul Action";
+
+  return null;
+}
+
+/*******************
+ FETCH PRO HISTORY
+*******************/
+async function getShipmentHistory(DO){
+
+  const r = await fetch(`${SHIPMENT_HISTORY_URL}/${DO}`,{
+      credentials:"include"
+  });
+
+  const j = await r.json();
+  return j?.data || [];
+}
+
+/*******************
+ EVENT CORRELATION
+*******************/
+function correlate(change, history){
+
+  const changeTime = ts(change.time);
+
+  let best = null;
+
+  for(const h of history){
+    const diff = Math.abs(ts(h.event_time)-changeTime);
+
+    if(diff <= 45000){
+      if(!best || diff < best.diff){
+          best = {diff, h};
+      }
+    }
+  }
+
+  if(!best)
+    return "No matching shipment history";
+
+  return best.h.event;
+}
+
+/*******************
+ MAIN RUN
+*******************/
+async function run(){
+
+out.textContent="";
+
+try{
+
+  await login(user.value,pass.value);
+
+  const tripHistory = await fetchTrip(trip.value);
+
+  write(`📄 Raw events: ${tripHistory.length}`);
+  write("");
+
+  const changes=[];
+
+  tripHistory.forEach(e=>{
+      const pro = extractPRO(e);
+      const type = eventType(e.event_description);
+
+      if(!pro || !type) return;
+
+      changes.push({
+         pro,
+         do: extractDO(e.event_description),
+         time: e.time,
+         user: e.user || "",
+         type
+      });
+  });
+
+  const proList = [...new Set(changes.map(c=>c.pro))];
+
+  write(`🔍 Found ${proList.length} impacted PROs`);
+  write("");
+
+  const results = {};
+
+  for(const p of proList){
+
+      write(`➡️ Processing PRO ${p}`);
+
+      results[p]=[];
+
+      const first = changes.find(x=>x.pro===p);
+
+      if(!first || !first.do){
+         results[p].push({
+             time: "",
+             type:"Unable to resolve DO",
+             user:"",
+             status:""
+         });
+         continue;
+      }
+
+      const history = await getShipmentHistory(first.do);
+
+      for(const ev of changes.filter(x=>x.pro===p)){
+
+          const correlated = correlate(ev,history);
+
+          results[p].push({
+             time:ev.time,
+             type:ev.type,
+             user:ev.user,
+             status:correlated
+          });
+      }
+  }
+
+  /*******************
+   OUTPUT REPORT
+  *******************/
+  write("");
+  write("===========================================");
+  write("=============== AUDIT REPORT ==============");
+  write("===========================================");
+  write("");
+
+  for(const p in results){
+
+    write(`PRO ${p}`);
+    write("--------------------------------------");
+
+    results[p].forEach(e=>{
+
+       write(`${e.time}`);
+       write(`Action: ${e.type}`);
+       write(`User: ${e.user}`);
+       write(`Status Event: ${e.status}`);
+       write("");
+    });
+
+    write("");
+  }
+
+  write("✅ AUDIT COMPLETE");
+
+}
+catch(err){
+  write("");
+  write("❌ ERROR");
+  write(err.toString());
+}
+
+}
+</script>
+
+</body>
+</html>
