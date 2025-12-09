@@ -14,7 +14,9 @@
   --accent2:#22d3ee;
   --border:#1f2933;
 }
+
 *{box-sizing:border-box}
+
 body{
   margin:0;
   padding:0;
@@ -22,15 +24,18 @@ body{
   color:var(--text);
   font-family:Inter,system-ui,Segoe UI,Roboto,Ubuntu,Arial,sans-serif;
 }
+
 .wrap{
   max-width:1100px;
   margin:40px auto;
   padding:20px;
 }
+
 h1{
   margin:0 0 15px 0;
   font-size:26px;
 }
+
 .card{
   background:linear-gradient(180deg,#111827 0%, #0b1220 100%);
   border:1px solid var(--border);
@@ -38,12 +43,14 @@ h1{
   padding:20px;
   box-shadow:0 20px 40px rgba(0,0,0,.5);
 }
+
 .row{
   display:flex;
   flex-wrap:wrap;
   gap:10px;
   margin-bottom:10px;
 }
+
 input{
   background:#0b0f19;
   color:var(--text);
@@ -53,19 +60,16 @@ input{
   font-size:14px;
   width:190px;
 }
+
 input[type="password"]{
   padding-right:42px;
 }
 
-/* PASSWORD TOGGLE FIX */
-input[type="password"]::-ms-reveal,
-input[type="password"]::-ms-clear{
-  filter:invert(1) brightness(1.6);
-}
 ::-webkit-textfield-decoration-container{
   filter:invert(1) brightness(1.6);
   scale:1.25;
 }
+
 button{
   cursor:pointer;
   border:none;
@@ -76,14 +80,17 @@ button{
   font-weight:700;
   font-size:14px;
 }
+
 .status{
   color:var(--muted);
   margin:8px 0 6px;
 }
+
 .timer{
   color:#22d3ee;
   font-size:13px;
 }
+
 pre{
   background:#070b14;
   border-radius:12px;
@@ -96,10 +103,10 @@ pre{
 }
 </style>
 </head>
+
 <body>
 
 <div class="wrap">
-
 <h1>🚚 FMS Trip Change Audit Bot</h1>
 
 <div class="card">
@@ -115,15 +122,12 @@ pre{
 
   <pre id="out"></pre>
 </div>
-
 </div>
 
 <script>
 (()=>{
 
-/* ================================================== */
-/* CONFIG */
-/* ================================================== */
+/* === CONFIG === */
 const BASE="https://fms.item.com";
 const CLIENT="FMS_WEB";
 
@@ -131,32 +135,29 @@ const LOGIN_URL   = `${BASE}/fms-platform-user/Auth/Login`;
 const TASKS_URL   = `${BASE}/fms-platform-dispatch-management/TripDetail/GetTaskList`;
 const HISTORY_URL = `${BASE}/fms-platform-dispatch-management/Trips/GetTripHistory`;
 const SHIP_URL    = `${BASE}/fms-platform-order/shipment-order-history/`;
-const SEARCH_URL = `${BASE}/fms-platform-dispatch-management/search-all?Keyword=`;
+const SEARCH_URL  = `${BASE}/fms-platform-dispatch-management/search-all?Keyword=`;
 
-/* ================================================== */
 const $ = id => document.getElementById(id);
 
 let TOKEN=null;
 let timerInt=null;
 
-/* ================================================== */
-/* AUTH */
-/* ================================================== */
+/* ================= AUTH ================= */
 async function auth(){
   if(TOKEN) return TOKEN;
 
   $("status").textContent="Logging in…";
 
   const r = await fetch(LOGIN_URL,{
-      method:"POST",
-      headers:{
-          "Content-Type":"application/json",
-          "fms-client":CLIENT
-      },
-      body:JSON.stringify({
-          account:$("user").value.trim(),
-          password:$("pass").value.trim()
-      })
+    method:"POST",
+    headers:{
+      "Content-Type":"application/json",
+      "fms-client":CLIENT
+    },
+    body:JSON.stringify({
+      account:$("user").value.trim(),
+      password:$("pass").value.trim()
+    })
   });
 
   if(!r.ok) throw new Error("Login failed");
@@ -169,65 +170,58 @@ async function auth(){
   return TOKEN;
 }
 
-/* ================================================== */
-/* API */
-/* ================================================== */
+/* ================= API WRAPPER ================= */
 async function api(url){
   const t = await auth();
 
   const r = await fetch(url,{
-      headers:{
-          "accept":"application/json",
-          "Content-Type":"application/json",
-          "fms-client":CLIENT,
-          "fms-token":t
-      }
+    headers:{
+      "accept":"application/json",
+      "Content-Type":"application/json",
+      "fms-client":CLIENT,
+      "fms-token":t
+    }
   });
 
   if(!r.ok) throw new Error(`HTTP ${r.status}`);
-
   return r.json();
 }
 
-/* ================================================== */
-/* TIMER */
-/* ================================================== */
+/* ================= TIMER ================= */
 function startTimer(){
   const start=Date.now();
-  timerInt = setInterval(()=>{
-      const s=((Date.now()-start)/1000).toFixed(2);
-      $("timer").textContent=`Elapsed: ${s}s`;
+  timerInt=setInterval(()=>{
+    const s=((Date.now()-start)/1000).toFixed(2);
+    $("timer").textContent=`Elapsed: ${s}s`;
   },100);
 }
 function stopTimer(){
-  if(timerInt) clearInterval(timerInt);
+  clearInterval(timerInt);
 }
 
-/* ================================================== */
-/* STATUS CHANGE PARSER */
-/* ================================================== */
+/* ================= STATUS PARSER ================= */
 function extractStatusEvent(e){
-  if(!e || !e.event) return null;
-  if(!e.event.includes("Changed Order Status")) return null;
+  if(!e?.event?.includes("Changed Order Status")) return null;
 
-  const short = e.event.split("].")[0] + "]";
-  return {
-      time:e.event_time,
-      text:short
+  const short=e.event.split("].")[0]+"]";
+
+  return{
+    time:e.event_time,
+    text:short
   };
 }
 
-/* ================================================== */
-/* PRO → DO RESOLVER */
-/* ================================================== */
+/* ================= DO RESOLVER ================= */
 async function resolveDOFromPRO(pro){
-  const j = await api(SEARCH_URL + pro);
-  return j?.data?.orders?.[0]?.order_no || null;
+  try{
+    const s=await api(SEARCH_URL+pro);
+    return s?.data?.orders?.[0]?.order_no || null;
+  }catch{
+    return null;
+  }
 }
 
-/* ================================================== */
-/* MAIN AUDIT */
-/* ================================================== */
+/* ================= MAIN AUDIT ================= */
 async function audit(){
 
   $("out").textContent="";
@@ -238,127 +232,118 @@ async function audit(){
   startTimer();
 
   try{
-    const tripNo = $("trip").value.trim();
+
+    const tripNo=$("trip").value.trim();
     if(!tripNo) throw new Error("Trip # required");
 
-    /* ---------- TASK LIST ---------- */
     $("status").textContent="Fetching tasks…";
-    const tasks = await api(`${TASKS_URL}?tripNo=${tripNo}`);
+    const tasks=await api(`${TASKS_URL}?tripNo=${tripNo}`);
 
     const MAP={};
 
     (tasks?.data||[]).forEach(t=>{
       if(!t.task_no || !t.tracking_no) return;
 
-      MAP[t.task_no] = {
+      MAP[t.task_no]={
         PRO:t.tracking_no,
-        DO:t.shipment_order_no || t.order_no || "",
-        PU:t.pu_no || ""
+        DO:t.shipment_order_no||t.order_no||"",
+        PU:t.pu_no||""
       };
     });
 
-    /* ---------- TRIP HISTORY ---------- */
     $("status").textContent="Fetching trip history…";
-    const hist = await api(`${HISTORY_URL}?tripNo=${tripNo}`);
+    const h=await api(`${HISTORY_URL}?tripNo=${tripNo}`);
 
     const perPRO={};
 
-    (hist?.data?.trip_history_list||[]).forEach(h=>{
-      if(!h.event_description?.includes("Dispatched")) return;
+    /****** COLLECT DISPATCH EVENTS ******/
+    (h?.data?.trip_history_list||[]).forEach(ev=>{
+      if(!ev.event_description?.toLowerCase().includes("dispatched"))
+        return;
 
-      const m = MAP[h.task_no] || {
-        PRO(h.event_description.match(/PRO#\s*(\d+)/)?.[1] || ""),
-        DO:"",
-        PU:""
-      };
+      let pro =
+        MAP[ev.task_no]?.PRO ||
+        ev.event_description.match(/PRO#\s*(\d+)/)?.[1];
 
-      if(!m.PRO) return;
+      if(!pro) return;
 
-      if(!perPRO[m.PRO]){
-        perPRO[m.PRO] = {
-          PRO:m.PRO,
-          DO:m.DO || "",
-          PU:m.PU || "",
+      if(!perPRO[pro]){
+        perPRO[pro]={
+          PRO:pro,
+          DO: MAP[ev.task_no]?.DO || "",
+          PU: MAP[ev.task_no]?.PU || "",
           events:[]
         };
       }
 
-      perPRO[m.PRO].events.push({
+      perPRO[pro].events.push({
         trip:{
-          time:h.time,
-          text:h.event_description,
-          user:h.user || ""
+          time:ev.time,
+          text:ev.event_description,
+          user:ev.user||""
         },
         ship:null
       });
+
     });
 
-    /* ---------- SHIPMENT MATCHING ---------- */
-    $("status").textContent="Resolving DOs & matching shipments…";
+    /****** RESOLVE DO + MATCH SHIP EVENTS ******/
+    $("status").textContent="Resolving orders & matching shipments…";
 
     for(const pro of Object.keys(perPRO)){
-      const obj = perPRO[pro];
+      const record=perPRO[pro];
 
-      /* Resolve missing DO */
-      if(!obj.DO){
-        obj.DO = await resolveDOFromPRO(pro);
+      if(!record.DO){
+        record.DO=await resolveDOFromPRO(pro);
       }
 
-      if(!obj.DO) continue;
+      if(!record.DO) continue;
 
-      const ship = await api(SHIP_URL + obj.DO);
-      const arr = ship?.data || [];
+      const ship=await api(SHIP_URL+record.DO);
+      const arr=ship?.data||[];
 
-      for(const evt of obj.events){
-
+      record.events.forEach(evt=>{
         let best=null;
 
-        arr.forEach(ev=>{
-          const s = extractStatusEvent(ev);
+        arr.forEach(se=>{
+          const s=extractStatusEvent(se);
           if(!s) return;
 
-          const t0=new Date(evt.trip.time).getTime();
-          const t1=new Date(s.time).getTime();
-          const diff=Math.abs(t1 - t0);
+          const d=Math.abs(new Date(evt.trip.time)-new Date(s.time));
 
-          if(!best || diff < best.diff){
-            best={ev:s,diff};
-          }
+          if(!best || d<best.diff)
+            best={diff:d,ev:s};
         });
 
-        if(best){
-          evt.ship = best.ev;
-        }
-      }
+        if(best) evt.ship=best.ev;
+      });
+
     }
 
-    /* ---------- OUTPUT ---------- */
-    $("status").textContent="Rendering…";
+    /****** OUTPUT ******/
     stopTimer();
+    $("status").textContent="✅ Audit complete";
 
     let out="";
 
-    for(const pro of Object.keys(perPRO).sort()){
-
-      const o = perPRO[pro];
+    Object.keys(perPRO).sort().forEach(p=>{
+      const o=perPRO[p];
 
       out+=`PRO ${o.PRO}\n`;
-      out+=`DO  ${o.DO || "-"}\n`;
-      out+=`PU  ${o.PU || "-"}\n`;
+      out+=`DO  ${o.DO||"-"}\n`;
+      out+=`PU  ${o.PU||"-"}\n`;
 
       o.events.forEach(ev=>{
         out+=`  ${ev.trip.time} | ${ev.trip.text} (${ev.trip.user})\n`;
-
         if(ev.ship){
           out+=`  ${ev.ship.time} | ${ev.ship.text}\n`;
         }
       });
 
       out+="--------------------------------------------\n";
-    }
+    });
 
     $("out").textContent = out || "No matching events found.";
-    $("status").textContent="✅ Audit complete";
 
   }catch(e){
     stopTimer();
@@ -368,10 +353,8 @@ async function audit(){
   }
 }
 
-/* ================================================== */
-/* UI */
-/* ================================================== */
-$("run").addEventListener("click",audit);
+/* ================= UI ================= */
+$("run").addEventListener("click", audit);
 
 })();
 </script>
