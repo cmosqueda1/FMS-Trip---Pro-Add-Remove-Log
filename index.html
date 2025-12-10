@@ -8,38 +8,40 @@
 :root{
   --bg:#05070b;
   --card:#0f1420;
+  --card-soft:#141a2b;
+  --pair:#0b0f1c;
+  --border:#1f2933;
   --text:#e6edf6;
   --muted:#93a4b7;
   --accent:#7c3aed;
   --accent2:#22d3ee;
-  --border:#1f2933;
 }
+
 *{box-sizing:border-box}
 
 body{
   margin:0;
-  padding:0;
   background:var(--bg);
   color:var(--text);
   font-family:Inter,system-ui,Segoe UI,Roboto,Ubuntu,Arial,sans-serif;
 }
+
 .wrap{
-  max-width:1100px;
+  max-width:1200px;
   margin:40px auto;
   padding:20px;
 }
-h1{margin:0 0 15px 0;font-size:26px;}
 
-.card{
-  background:linear-gradient(180deg,#111827 0%, #0b1220 100%);
-  border:1px solid var(--border);
-  border-radius:16px;
-  padding:20px;
-  box-shadow:0 20px 40px rgba(0,0,0,.5);
+h1{
+  margin:0 0 15px 0;
+  font-size:26px;
 }
-.row{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:10px;}
 
-.login-hidden{display:none!important;}
+.toolbar{
+  display:flex;
+  gap:10px;
+  margin-bottom:12px;
+}
 
 input{
   background:#0b0f19;
@@ -48,8 +50,9 @@ input{
   border-radius:12px;
   padding:10px 14px;
   font-size:14px;
-  width:190px;
+  width:160px;
 }
+
 button{
   cursor:pointer;
   border:none;
@@ -60,43 +63,129 @@ button{
   font-weight:700;
   font-size:14px;
 }
-.status{color:var(--muted);margin:8px 0 6px;}
-.timer{color:#22d3ee;font-size:13px;}
 
-pre{
-  background:#070b14;
-  border-radius:12px;
-  padding:16px;
-  overflow:auto;
-  max-height:70vh;
+.status{
+  color:var(--muted);
+  margin:8px 0 4px;
+}
+
+.timer{
+  color:#22d3ee;
   font-size:13px;
+  margin-bottom:14px;
+}
+
+/* ===== ORDER CARD ===== */
+
+.orders{
+  display:flex;
+  flex-direction:column;
+  gap:14px;
+}
+
+.order-card{
+  background:linear-gradient(180deg,#111827,#0b1220);
   border:1px solid var(--border);
-  white-space:pre-wrap;
+  border-radius:16px;
+  box-shadow:0 18px 40px rgba(0,0,0,.45);
+  padding:16px;
+}
+
+.order-header{
+  border-bottom:1px solid var(--border);
+  margin-bottom:12px;
+  padding-bottom:8px;
+}
+
+.order-title{
+  font-size:17px;
+  font-weight:700;
+}
+
+.order-meta{
+  margin-top:2px;
+  color:var(--muted);
+  font-size:13px;
+}
+
+/* ==== EVENT PAIRS ==== */
+
+.pair{
+  background:var(--pair);
+  border:1px solid #1b2233;
+  border-radius:12px;
+  padding:10px 12px;
+  margin-bottom:10px;
+}
+
+.event{
+  display:flex;
+  gap:10px;
+  font-size:13px;
+  line-height:1.35;
+}
+
+.tag{
+  min-width:72px;
+  text-align:center;
+  padding:2px 6px;
+  border-radius:999px;
+  font-size:11px;
+  font-weight:700;
+}
+
+.tag.trip{
+  background:#1e293b;
+  color:#7dd3fc;
+}
+
+.tag.ship{
+  background:#1f2937;
+  color:#7c3aed;
+}
+
+.time{
+  min-width:165px;
+  font-family:monospace;
+  font-size:12px;
+  color:#93c5fd;
+}
+
+.text{
+  flex:1;
+  color:var(--text);
+}
+
+.ship .time{
+  color:#c4b5fd;
+}
+
+/* EMPTY STATE */
+
+.empty{
+  color:var(--muted);
+  margin-top:20px;
+  text-align:center;
+  font-size:14px;
 }
 </style>
 </head>
 
 <body>
-
 <div class="wrap">
+
 <h1>🚚 FMS Trip Change Audit Bot</h1>
 
-<div class="card">
-  <div class="row">
-
-    <!-- Hidden credentials -->
-    <input id="user" class="login-hidden" value="RaulEscobar">
-    <input id="pass" class="login-hidden" value="FMSoffload1!">
-
-    <input id="trip" placeholder="Trip #" style="width:160px">
-    <button id="run">Run Audit</button>
-
-  </div>
-
-  <div class="status" id="status">Idle</div>
-  <div class="timer" id="timer"></div>
-  <pre id="out"></pre>
+<div class="toolbar">
+  <input id="trip" placeholder="Trip #">
+  <button id="run">Run Audit</button>
 </div>
+
+<div class="status" id="status">Idle</div>
+<div class="timer" id="timer"></div>
+
+<div class="orders" id="out"></div>
+
 </div>
 
 <script>
@@ -105,22 +194,19 @@ pre{
 const BASE="https://fms.item.com";
 const CLIENT="FMS_WEB";
 
-const LOGIN_URL   = `${BASE}/fms-platform-user/Auth/Login`;
-const TASKS_URL   = `${BASE}/fms-platform-dispatch-management/TripDetail/GetTaskList`;
-const HISTORY_URL = `${BASE}/fms-platform-dispatch-management/Trips/GetTripHistory`;
-const SHIP_URL    = `${BASE}/fms-platform-order/shipment-order-history/`;
-const SEARCH_URL  = `${BASE}/fms-platform-dispatch-management/search-all?Keyword=`;
+const LOGIN_URL=`${BASE}/fms-platform-user/Auth/Login`;
+const TASKS_URL=`${BASE}/fms-platform-dispatch-management/TripDetail/GetTaskList`;
+const HISTORY_URL=`${BASE}/fms-platform-dispatch-management/Trips/GetTripHistory`;
+const SHIP_URL=`${BASE}/fms-platform-order/shipment-order-history/`;
+const SEARCH_URL=`${BASE}/fms-platform-dispatch-management/search-all?Keyword=`;
 
-const $ = id => document.getElementById(id);
+const $=id=>document.getElementById(id);
 
 let TOKEN=null;
 let timerInt=null;
 
-/* AUTH */
 async function auth(){
   if(TOKEN) return TOKEN;
-
-  $("status").textContent="Logging in…";
 
   const r=await fetch(LOGIN_URL,{
     method:"POST",
@@ -134,16 +220,12 @@ async function auth(){
     })
   });
 
-  if(!r.ok) throw new Error("Login failed");
-
   const j=await r.json();
-  TOKEN=j.token || j?.data?.token;
-  if(!TOKEN) throw new Error("Token missing");
-
+  TOKEN=j.token||j?.data?.token;
+  if(!TOKEN) throw new Error("Login failed");
   return TOKEN;
 }
 
-/* API */
 async function api(url){
   const t=await auth();
   const r=await fetch(url,{
@@ -154,51 +236,41 @@ async function api(url){
       "fms-token":t
     }
   });
-
-  if(!r.ok) throw new Error(`HTTP ${r.status}`);
+  if(!r.ok) throw new Error("HTTP "+r.status);
   return r.json();
 }
 
-/* Shipment filter */
 function extractShipmentEvent(e){
-  const s = e?.event?.toLowerCase();
+  const s=e?.event?.toLowerCase();
   if(!s) return null;
-
   if(
     s.includes("changed order status") ||
     s.includes("delivered") ||
     s.includes("pickup") ||
     s.includes("out for delivery")
   ){
-    return {
+    return{
       time:e.event_time,
-      text:e.event.split("].")[0] + "]"
+      text:e.event.split("].")[0]+"]"
     };
   }
   return null;
 }
 
-/* Undispatch detection */
 function looksUnDispatch(desc){
   desc=desc.toLowerCase();
-  return (
-    desc.includes("undispatch") ||
-    desc.includes("un-dispatch") ||
-    desc.includes("un dispatch") ||
-    desc.includes("removed")
-  );
+  return desc.includes("undispatch")||desc.includes("un dispatch")||desc.includes("removed");
 }
 
-/* DO normalize */
-function normalizeDO(doVal){
-  if(!doVal) return "";
-  if(doVal.startsWith("DO")) return doVal;
-  return "DO" + doVal.replace(/[^0-9]/g,"");
+function normalizeDO(v){
+  if(!v) return "";
+  if(v.startsWith("DO")) return v;
+  return "DO"+v.replace(/[^0-9]/g,"");
 }
 
-/* MAIN */
+
 async function audit(){
-  $("out").textContent="";
+  $("out").innerHTML="";
   $("status").textContent="Starting…";
   $("timer").textContent="";
   TOKEN=null;
@@ -212,13 +284,11 @@ async function audit(){
   },100);
 
   try{
-
-    $("status").textContent="Fetching tasks…";
     const tasks=await api(`${TASKS_URL}?tripNo=${trip}`);
 
     const MAP={};
     (tasks?.data||[]).forEach(t=>{
-      if(!t.task_no) return;
+      if(!t.task_no)return;
       MAP[t.task_no]={
         PRO:t.tracking_no||"",
         DO:normalizeDO(t.shipment_order_no||t.order_no||""),
@@ -226,7 +296,6 @@ async function audit(){
       };
     });
 
-    $("status").textContent="Fetching trip history…";
     const hist=await api(`${HISTORY_URL}?tripNo=${trip}`);
 
     const buckets={};
@@ -235,18 +304,15 @@ async function audit(){
       const raw=ev.event_description||"";
       const desc=raw.toLowerCase();
 
-      const isDispatch=desc.includes("dispatched");
-      const isUnDispatch=looksUnDispatch(desc);
-      if(!isDispatch && !isUnDispatch) return;
+      if(!desc.includes("dispatched") && !looksUnDispatch(desc)) return;
 
-      let PRO="", DO="", PU="";
-
+      let PRO="",DO="",PU="";
       const m=ev.task_no?MAP[ev.task_no]:null;
-      if(m){ PRO=m.PRO; DO=m.DO; PU=m.PU; }
+      if(m){PRO=m.PRO;DO=m.DO;PU=m.PU;}
 
       if(!PRO){
-        const sm=raw.match(/pro[#:\s]*([0-9]+)/i);
-        if(sm) PRO=sm[1];
+        const pm=raw.match(/pro[#:\s]*([0-9]+)/i);
+        if(pm) PRO=pm[1];
       }
 
       if(!DO){
@@ -254,32 +320,19 @@ async function audit(){
         if(dm) DO=normalizeDO(dm[1]);
       }
 
-      if(!DO && ev.order_no){
-        DO=normalizeDO(ev.order_no);
-      }
+      if(!DO && ev.order_no) DO=normalizeDO(ev.order_no);
 
       const key=PRO||DO||"(none)";
 
       if(!buckets[key]){
-        buckets[key]={
-          PRO:PRO||"(none)",
-          DO:DO||"-",
-          PU:PU||"-",
-          tripEvents:[]
-        };
+        buckets[key]={PRO:PRO||"(none)",DO:DO||"-",PU:PU||"-",tripEvents:[]};
       }
 
-      buckets[key].tripEvents.push({
-        time:ev.time,
-        text:raw,
-        user:ev.user||""
-      });
+      buckets[key].tripEvents.push({time:ev.time,text:raw,user:ev.user||""});
     });
 
-    $("status").textContent="Matching shipments…";
-
-    for(const key in buckets){
-      const r=buckets[key];
+    for(const k in buckets){
+      const r=buckets[k];
 
       let DO=r.DO==="-"?"":r.DO;
 
@@ -297,11 +350,10 @@ async function audit(){
       let ships=[];
       if(DO){
         try{
-          ships=await api(SHIP_URL+DO).then(r=>r?.data||[]);
+          ships=(await api(SHIP_URL+DO))?.data||[];
         }catch{}
       }
 
-      /* Pair shipment with each trip event */
       r.pairs=[];
 
       r.tripEvents.forEach(t=>{
@@ -309,10 +361,10 @@ async function audit(){
 
         ships.forEach(s=>{
           const sx=extractShipmentEvent(s);
-          if(!sx) return;
+          if(!sx)return;
 
           const diff=Math.abs(new Date(t.time)-new Date(sx.time));
-          if(!best || diff<best.diff){
+          if(!best||diff<best.diff){
             best={diff,sx};
           }
         });
@@ -325,31 +377,51 @@ async function audit(){
     }
 
     clearInterval(timerInt);
+
     $("status").textContent="✅ Audit complete";
 
-    let out="";
+    for(const k in buckets){
+      const r=buckets[k];
 
-    for(const key in buckets){
-      const r=buckets[key];
+      const card=document.createElement("div");
+      card.className="order-card";
 
-      out+=`PRO ${r.PRO}\n`;
-      out+=`DO  ${r.DO}\n`;
-      out+=`PU  ${r.PU}\n`;
+      card.innerHTML=`
+        <div class="order-header">
+          <div class="order-title">PRO ${r.PRO}</div>
+          <div class="order-meta">DO ${r.DO} &nbsp;&nbsp;|&nbsp;&nbsp; PU ${r.PU}</div>
+        </div>
+      `;
 
       r.pairs.forEach(p=>{
-        out+=`  ${p.trip.time} | ${p.trip.text}${p.trip.user?` (${p.trip.user})`:""}\n`;
-        out+=`  ${p.ship.time||"                      "} | ${p.ship.text}\n\n`;
+        const pair=document.createElement("div");
+        pair.className="pair";
+        pair.innerHTML=`
+          <div class="event trip">
+            <div class="tag trip">TRIP</div>
+            <div class="time">${p.trip.time}</div>
+            <div class="text">${p.trip.text}</div>
+          </div>
+          <div class="event ship">
+            <div class="tag ship">SHIP</div>
+            <div class="time">${p.ship.time||" "}</div>
+            <div class="text">${p.ship.text}</div>
+          </div>
+        `;
+        card.appendChild(pair);
       });
 
-      out+="--------------------------------------------\n";
+      $("out").appendChild(card);
     }
 
-    $("out").textContent=out||"No events found.";
+    if(!$("out").children.length){
+      $("out").innerHTML=`<div class="empty">No events found.</div>`;
+    }
 
   }catch(e){
     clearInterval(timerInt);
     $("status").textContent="❌ Error";
-    $("out").textContent=e.message;
+    $("out").innerHTML=`<div class="empty">${e.message}</div>`;
   }
 }
 
