@@ -51,24 +51,9 @@ h1{
   margin-bottom:10px;
 }
 
-.pw-wrap{
-  position:relative;
-}
-
-.pw-wrap input{
-  width:190px;
-}
-
-.pw-eye{
-  position:absolute;
-  right:12px;
-  top:50%;
-  transform:translateY(-50%);
-  cursor:pointer;
-  width:20px;
-  height:20px;
-  fill:white;
-  opacity:0.85;
+/* hide login fields */
+.login-hidden{
+  display:none !important;
 }
 
 input{
@@ -122,17 +107,14 @@ pre{
 
 <div class="card">
   <div class="row">
-    <input id="user" placeholder="Username">
 
-    <div class="pw-wrap">
-      <input id="pass" placeholder="Password" type="password">
-      <svg class="pw-eye" id="pwToggle" viewBox="0 0 24 24">
-        <path d="M12 5c-7.633 0-11 7-11 7s3.367 7 11 7 11-7 11-7-3.367-7-11-7zm0 12a5 5 0 110-10 5 5 0 010 10zm0-8a3 3 0 100 6 3 3 0 000-6z"/>
-      </svg>
-    </div>
+    <!-- Hidden hard-coded credentials -->
+    <input id="user" class="login-hidden" value="RaulEscobar">
+    <input id="pass" class="login-hidden" value="FMSoffload1!">
 
     <input id="trip" placeholder="Trip #" style="width:160px">
     <button id="run">Run Audit</button>
+
   </div>
 
   <div class="status" id="status">Idle</div>
@@ -144,6 +126,7 @@ pre{
 
 <script>
 (()=>{
+
 const BASE="https://fms.item.com";
 const CLIENT="FMS_WEB";
 
@@ -158,13 +141,7 @@ const $ = id => document.getElementById(id);
 let TOKEN=null;
 let timerInt=null;
 
-/* password eye toggle */
-$("pwToggle").addEventListener("click",()=>{
-  const p=$("pass");
-  p.type = p.type==="password" ? "text" : "password";
-});
-
-/* login (never change) */
+/* login (hard-coded) */
 async function auth(){
   if(TOKEN) return TOKEN;
 
@@ -177,8 +154,8 @@ async function auth(){
       "fms-client":CLIENT
     },
     body:JSON.stringify({
-      account:$("user").value.trim(),
-      password:$("pass").value.trim()
+      account: "RaulEscobar",
+      password: "FMSoffload1!"
     })
   });
 
@@ -191,7 +168,7 @@ async function auth(){
   return TOKEN;
 }
 
-/* API */
+/* API wrapper */
 async function api(url){
   const t=await auth();
   const r=await fetch(url,{
@@ -260,7 +237,6 @@ async function audit(){
   },100);
 
   try{
-    /* get tasks */
     $("status").textContent="Fetching tasks…";
     const tasks=await api(`${TASKS_URL}?tripNo=${tripNo}`);
 
@@ -274,14 +250,13 @@ async function audit(){
       };
     });
 
-    /* get trip history */
     $("status").textContent="Fetching trip history…";
     const hist=await api(`${HISTORY_URL}?tripNo=${tripNo}`);
 
     const perBucket={};
 
     (hist?.data?.trip_history_list||[]).forEach(ev=>{
-      const raw=ev.event_description || "";
+      const raw=ev.event_description||"";
       const desc=raw.toLowerCase();
 
       const isDispatch   = desc.includes("dispatched");
@@ -290,37 +265,30 @@ async function audit(){
 
       let PRO="", DO="", PU="";
 
-      /* task-based mapping */
       let mapped = ev.task_no ? MAP[ev.task_no] : null;
       if(mapped){
-        PRO = mapped.PRO;
-        DO  = mapped.DO;
-        PU  = mapped.PU;
+        PRO=mapped.PRO;
+        DO=mapped.DO;
+        PU=mapped.PU;
       }
 
-      /* extract PRO from text */
       const proMatch = raw.match(/pro[#:\s]*([0-9]+)/i);
-      if(!PRO && proMatch){
-        PRO = proMatch[1];
-      }
+      if(!PRO && proMatch) PRO=proMatch[1];
 
-      /* extract DO from text */
       const doMatch = raw.match(/do[#:\s]*([0-9]+)/i);
-      if(!DO && doMatch){
-        DO = normalizeDO(doMatch[1]);
-      }
+      if(!DO && doMatch) DO=normalizeDO(doMatch[1]);
 
-      /* fallback: order_no */
       if(!DO && ev.order_no){
-        DO = normalizeDO(ev.order_no);
+        DO=normalizeDO(ev.order_no);
       }
 
       const key = PRO || DO || "(none)";
+
       if(!perBucket[key]){
-        perBucket[key] = {
-          PRO: PRO || "(none)",
-          DO:  DO  || "-",
-          PU:  PU  || "-",
+        perBucket[key]={
+          PRO: PRO||"(none)",
+          DO:  DO||"-",
+          PU:  PU||"-",
           events:[]
         };
       }
@@ -329,39 +297,34 @@ async function audit(){
         type:"trip",
         time:ev.time,
         text:raw,
-        user:ev.user || ""
+        user:ev.user||""
       });
     });
 
-    /* shipment stitching */
     $("status").textContent="Matching shipment events…";
 
     for(const bucket of Object.keys(perBucket)){
       const rec=perBucket[bucket];
 
-      let DO = rec.DO === "-" ? "" : rec.DO;
+      let DO = rec.DO==="-" ? "" : rec.DO;
 
-      /* ALWAYS use real shipment DO via PRO lookup */
-      if(rec.PRO && rec.PRO !== "(none)"){
+      if(rec.PRO && rec.PRO!=="(none)"){
         try{
-          const s = await api(SEARCH_URL + rec.PRO);
+          const s=await api(SEARCH_URL + rec.PRO);
           const found = s?.data?.orders?.[0]?.order_no;
           if(found){
-            DO = normalizeDO(found);
-            rec.DO = DO;
+            DO=normalizeDO(found);
+            rec.DO=DO;
           }
         }catch{}
       }
 
-      /* pull shipment events */
       let shipEvents=[];
       if(DO){
         try{
-          const s = await api(SHIP_URL + DO);
-          shipEvents = s?.data || [];
-        }catch{
-          shipEvents=[];
-        }
+          const s=await api(SHIP_URL+DO);
+          shipEvents=s?.data||[];
+        }catch{}
       }
 
       const additions=[];
@@ -370,46 +333,32 @@ async function audit(){
         let nearest=null;
 
         shipEvents.forEach(se=>{
-          const sx = extractShipmentEvent(se);
+          const sx=extractShipmentEvent(se);
           if(!sx) return;
 
-          const diff = Math.abs(new Date(te.time) - new Date(sx.time));
-          if(!nearest || diff < nearest.diff){
-            nearest = { diff, sx };
+          const diff=Math.abs(new Date(te.time)-new Date(sx.time));
+          if(!nearest||diff<nearest.diff){
+            nearest={diff,sx};
           }
         });
 
-        if(nearest){
-          additions.push({
-            type:"ship",
-            time: nearest.sx.time,
-            text: nearest.sx.text,
-            user:""
-          });
-        } else {
-          additions.push({
-            type:"ship",
-            time:"",
-            text:"— No shipment event —",
-            user:""
-          });
-        }
+        additions.push(
+          nearest
+            ? {type:"ship",time:nearest.sx.time,text:nearest.sx.text,user:""}
+            : {type:"ship",time:"",text:"— No shipment event —",user:""}
+        );
       });
 
-      rec.events = rec.events.concat(additions);
+      rec.events=rec.events.concat(additions);
 
       rec.events.sort((a,b)=>{
-        if(!a.time && !b.time) return 0;
+        if(!a.time&&!b.time) return 0;
         if(!a.time) return 1;
         if(!b.time) return -1;
-
         let ta=new Date(a.time).getTime();
         let tb=new Date(b.time).getTime();
-
-        if(ta===tb){
-          return a.type==="trip" ? -1 : 1;
-        }
-        return ta - tb;
+        if(ta===tb) return a.type==="trip" ? -1 : 1;
+        return ta-tb;
       });
     }
 
@@ -438,11 +387,12 @@ async function audit(){
   }catch(e){
     clearInterval(timerInt);
     $("status").textContent="❌ Error";
-    $("out").textContent = e.message;
+    $("out").textContent=e.message;
   }
 }
 
 $("run").addEventListener("click", audit);
+
 })();
 </script>
 
