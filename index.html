@@ -32,19 +32,12 @@ body{
   padding:20px;
 }
 
-.controls{
-  display:flex;
-  gap:12px;
-  margin:10px 0 16px;
-}
-
 input{
   background:#0b0f19;
   border:1px solid var(--border);
+  color:var(--text);
   border-radius:14px;
   padding:10px 14px;
-  color:var(--text);
-  min-width:180px;
 }
 
 button{
@@ -55,6 +48,11 @@ button{
   padding:10px 22px;
   font-weight:700;
   cursor:pointer;
+}
+
+.controls{
+  display:flex;
+  gap:12px;
 }
 
 .status{color:var(--muted)}
@@ -79,23 +77,22 @@ button{
   gap:14px;
   border-bottom:1px solid var(--border);
   padding-bottom:10px;
-  margin-bottom:10px;
 }
 
-.header-box{
+.tag{
   background:#070b14;
-  border:1px solid var(--border);
   padding:6px 12px;
   border-radius:10px;
-  font-weight:700;
+  border:1px solid var(--border);
+  font-weight:600;
 }
-
-.header-box span{color:var(--muted)}
+.tag span{color:var(--muted)}
 
 .timeline{
   display:flex;
   flex-direction:column;
   gap:10px;
+  margin-top:10px;
 }
 
 .trip{
@@ -105,10 +102,7 @@ button{
   border:1px solid #1c2638;
 }
 
-.time{color:var(--accent2);font-size:12px}
-
 .ship{
-  margin-left:22px;
   margin-top:6px;
   border-left:3px solid #22c55e;
   background:#070b14;
@@ -116,17 +110,19 @@ button{
   border-radius:6px 12px 12px 6px;
 }
 
+.time{
+  color:var(--accent2);
+  font-size:12px;
+}
 .ship .time{color:#22c55e}
 
-.empty{
-  opacity:.6;
-  font-style:italic
-}
+.empty{opacity:.6;font-style:italic}
 </style>
 </head>
 
 <body>
 <div class="wrap">
+
 <h1>🚚 FMS Trip Change Audit Bot</h1>
 
 <div class="controls">
@@ -145,6 +141,7 @@ button{
 (()=>{
 const BASE="https://fms.item.com";
 const CLIENT="FMS_WEB";
+const TIME_WINDOW_MS = 120000;
 
 const LOGIN_URL=`${BASE}/fms-platform-user/Auth/Login`;
 const TASKS_URL=`${BASE}/fms-platform-dispatch-management/TripDetail/GetTaskList`;
@@ -155,20 +152,14 @@ const SEARCH_URL=`${BASE}/fms-platform-dispatch-management/search-all?Keyword=`;
 const FMS_USER="RaulEscobar";
 const FMS_PASS="FMSoffload1!";
 
-const TIME_WINDOW_MS = 120000; // 2 minute pairing window
-
 let TOKEN=null;
 let timerInt=null;
 
 const $=id=>document.getElementById(id);
 
-/* ================= AUTH ================= */
 async function auth(){
   if(TOKEN) return TOKEN;
-
-  $("status").textContent="Logging in…";
-
-  const r = await fetch(LOGIN_URL,{
+  const r=await fetch(LOGIN_URL,{
     method:"POST",
     headers:{
       "Content-Type":"application/json",
@@ -179,18 +170,15 @@ async function auth(){
       password:FMS_PASS
     })
   });
-
-  const j = await r.json();
-  TOKEN = j.token || j?.data?.token;
-
+  const j=await r.json();
+  TOKEN=j.token||j?.data?.token;
   if(!TOKEN) throw new Error("Login failed");
   return TOKEN;
 }
 
 async function api(url){
-  const t = await auth();
-
-  const r = await fetch(url,{
+  const t=await auth();
+  const r=await fetch(url,{
     headers:{
       accept:"application/json",
       "Content-Type":"application/json",
@@ -198,198 +186,182 @@ async function api(url){
       "fms-token":t
     }
   });
-
   if(!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
 }
 
-/* ================= HELPERS ================= */
-
 function normalizeDO(v){
-  if(!v) return "";
-  return v.startsWith("DO") ? v : "DO"+v.replace(/[^0-9]/g,"");
+  return v ? (v.startsWith("DO")?v:`DO${v.replace(/[^0-9]/g,"")}`):"";
 }
 
-function getAction(text=""){
-  text=text.toLowerCase();
-  if(text.includes("undispatch")) return "undispatch";
-  if(text.includes("dispatched")) return "dispatch";
+function getAction(t=""){
+  t=t.toLowerCase();
+  if(t.includes("undispatch")) return "undispatch";
+  if(t.includes("dispatched")) return "dispatch";
   return null;
 }
 
-function getTaskType(text=""){
-  text=text.toLowerCase();
-  if(text.includes("pickup")) return "pickup";
-  if(text.includes("delivery")) return "delivery";
+function taskExact(t,type){
+  t=t.toLowerCase();
+  return t.includes(`${type} task dispatched`) ||
+         t.includes(`${type} task undispatch`);
+}
+
+function getTaskType(t=""){
+  t=t.toLowerCase();
+  if(t.includes("pickup")) return "pickup";
+  if(t.includes("delivery")) return "delivery";
   return null;
 }
 
-/* Only keeps real shipment action rows */
-function extractShipmentEvent(e){
-  const s = e?.event?.toLowerCase();
+function extractShipment(se){
+  const s=se.event?.toLowerCase();
   if(!s) return null;
 
-  if(
-    s.includes("sync") ||
-    s.includes("longitude") ||
-    s.includes("latitude") ||
-    s.includes("appointment")
-  ) return null;
-
-  let action=null;
-
-  if(s.includes("undispatch")) action="undispatch";
-  else if(s.includes("dispatched")) action="dispatch";
-  else return null;
+  const action=getAction(s);
+  if(!action) return null;
 
   return {
-    time: new Date(e.event_time).getTime(),
-    label: e.event_time,
-    text: e.event,
+    time:new Date(se.event_time).getTime(),
+    label:se.event_time,
+    text:se.event,
     action,
-    type: getTaskType(e.event)
+    type:getTaskType(s)
   };
 }
-
-/* ================= MAIN ================= */
 
 async function audit(){
 
   TOKEN=null;
   $("orders").innerHTML="";
-  $("status").textContent="Running…";
+  $("status").textContent="Running...";
   $("timer").textContent="";
 
   const tripNo=$("trip").value.trim();
-  if(!tripNo) return alert("Trip required");
+  if(!tripNo) return;
 
-  const start = Date.now();
+  const start=Date.now();
   timerInt=setInterval(()=>{
     $("timer").textContent=`Elapsed: ${((Date.now()-start)/1000).toFixed(2)}s`;
   },100);
 
   try{
 
-    const tasks = await api(`${TASKS_URL}?tripNo=${tripNo}`);
+    const task=await api(`${TASKS_URL}?tripNo=${tripNo}`);
 
     const MAP={};
-
-    (tasks?.data||[]).forEach(t=>{
-      if(!t.task_no) return;
+    (task?.data||[]).forEach(t=>{
       MAP[t.task_no]={
         PRO:t.tracking_no||"",
-        DO: normalizeDO(t.shipment_order_no||t.order_no||""),
+        DO:normalizeDO(t.shipment_order_no||t.order_no||""),
         PU:t.pu_no||""
       };
     });
 
-    const history = await api(`${HISTORY_URL}?tripNo=${tripNo}`);
+    const hist=await api(`${HISTORY_URL}?tripNo=${tripNo}`);
 
-    const orders={};
+    const groups={};
 
-    (history?.data?.trip_history_list||[]).forEach(ev=>{
-      const action = getAction(ev.event_description||"");
-      if(!action) return;
+    const events=(hist?.data?.trip_history_list||[]);
+
+    events.forEach(ev=>{
+      const a=getAction(ev.event_description||"");
+      if(!a) return;
 
       let PRO="",DO="",PU="";
-
-      const m = MAP[ev.task_no];
-      if(m){
-        PRO=m.PRO;
-        DO=m.DO;
-        PU=m.PU;
+      if(MAP[ev.task_no]){
+        PRO=MAP[ev.task_no].PRO;
+        DO=MAP[ev.task_no].DO;
+        PU=MAP[ev.task_no].PU;
       }
 
       if(!PRO){
         const p=ev.event_description.match(/pro[#:\s]*([0-9]+)/i);
         if(p) PRO=p[1];
       }
-
       if(!DO){
         const d=ev.event_description.match(/do[#:\s]*([0-9]+)/i);
         if(d) DO=normalizeDO(d[1]);
       }
 
-      const key = PRO || DO || "UNKNOWN";
+      const key=PRO||DO||"UNKNOWN";
 
-      if(!orders[key]){
-        orders[key]={PRO:PRO||"(none)",DO:DO||"-",PU:PU||"-",events:[]};
+      if(!groups[key]){
+        groups[key]={PRO:PRO||"(none)",DO:DO||"-",PU:PU||"-",events:[]};
       }
 
-      orders[key].events.push({
+      groups[key].events.push({
         time:new Date(ev.time).getTime(),
         label:ev.time,
         text:ev.event_description,
-        action,
+        action:a,
         type:getTaskType(ev.event_description),
         ship:null
       });
-
     });
 
-    let ships=[];
+    let ship=[];
 
-    for(const k in orders){
+    for(const k in groups){
+      let DO=groups[k].DO;
 
-      let DO = orders[k].DO;
-
-      if(orders[k].PRO && orders[k].PRO!=="(none)"){
+      if(groups[k].PRO && groups[k].PRO!=="(none)"){
         try{
-          const s = await api(SEARCH_URL + orders[k].PRO);
+          const s=await api(SEARCH_URL+groups[k].PRO);
           const found=s?.data?.orders?.[0]?.order_no;
           if(found){
             DO=normalizeDO(found);
-            orders[k].DO=DO;
+            groups[k].DO=DO;
           }
         }catch{}
       }
 
       if(DO && DO!=="-"){
         try{
-          const sh = await api(SHIP_URL + DO);
-          (sh?.data||[]).forEach(se=>{
-            const x = extractShipmentEvent(se);
-            if(x) ships.push(x);
+          const sh=await api(SHIP_URL+DO);
+          (sh?.data||[]).forEach(e=>{
+            const x=extractShipment(e);
+            if(x) ship.push(x);
           });
         }catch{}
       }
     }
 
-    /* ===== TIMESTAMP-FIRST PAIRING ===== */
+    const used=new Set();
 
-    const usedShips=new Set();
-
-    for(const k in orders){
-      for(const ev of orders[k].events){
+    for(const k in groups){
+      for(const ev of groups[k].events){
 
         let best=null;
         let bestDiff=Infinity;
 
-        for(let i=0;i<ships.length;i++){
-          if(usedShips.has(i)) continue;
+        for(let i=0;i<ship.length;i++){
+          if(used.has(i)) continue;
 
-          const sh=ships[i];
-
-          const diff=Math.abs(ev.time - sh.time);
-
-          /* TIMESTAMP PASS FIRST */
+          const s=ship[i];
+          const diff=Math.abs(s.time - ev.time);
           if(diff > TIME_WINDOW_MS) continue;
+          if(s.action !== ev.action) continue;
 
-          if(sh.action !== ev.action) continue;
+          // STEP 2 — exact phrase match
+          if(ev.type && taskExact(s.text,ev.type)){
+            best={i,s};
+            break;
+          }
 
-          if(ev.type && sh.type && ev.type !== sh.type) continue;
+          // STEP 3 — fallback matching
+          if(ev.type && s.type && ev.type !== s.type) continue;
 
           if(diff < bestDiff){
             bestDiff=diff;
-            best={sh,idx:i};
+            best={i,s};
           }
         }
 
         if(best){
-          usedShips.add(best.idx);
-          ev.ship=best.sh;
+          used.add(best.i);
+          ev.ship=best.s;
         }
-
       }
     }
 
@@ -398,18 +370,17 @@ async function audit(){
 
     const cont=$("orders");
 
-    for(const k in orders){
+    for(const k in groups){
 
-      const o=orders[k];
-
+      const o=groups[k];
       const card=document.createElement("div");
       card.className="order";
 
       card.innerHTML=`
         <div class="order-header">
-          <div class="header-box"><span>PRO:</span> ${o.PRO}</div>
-          <div class="header-box"><span>DO:</span> ${o.DO}</div>
-          <div class="header-box"><span>PU:</span> ${o.PU}</div>
+          <div class="tag"><span>PRO:</span> ${o.PRO}</div>
+          <div class="tag"><span>DO:</span> ${o.DO}</div>
+          <div class="tag"><span>PU:</span> ${o.PU}</div>
         </div>
       `;
 
@@ -419,25 +390,17 @@ async function audit(){
       o.events.sort((a,b)=>a.time-b.time);
 
       o.events.forEach(e=>{
-
         const row=document.createElement("div");
         row.className="trip";
-
-        row.innerHTML=`
-          <div class="time">${e.label}</div>
-          <div>${e.text}</div>
-        `;
+        row.innerHTML=`<div class="time">${e.label}</div><div>${e.text}</div>`;
 
         const sh=document.createElement("div");
         sh.className="ship";
 
         if(e.ship){
-          sh.innerHTML=`
-            <div class="time">${e.ship.label}</div>
-            <div>${e.ship.text}</div>
-          `;
+          sh.innerHTML=`<div class="time">${e.ship.label}</div><div>${e.ship.text}</div>`;
         } else {
-          sh.innerHTML=`<div class="empty">— No shipment event —</div>`;
+          sh.innerHTML='<div class="empty">— No shipment event —</div>';
         }
 
         row.appendChild(sh);
@@ -450,13 +413,12 @@ async function audit(){
 
   }catch(err){
     clearInterval(timerInt);
-    $("status").textContent="❌ Error";
     $("orders").textContent=err.message;
+    $("status").textContent="❌ Error";
   }
 }
 
 $("run").addEventListener("click",audit);
-
 })();
 </script>
 
