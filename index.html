@@ -6,6 +6,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 
 <style>
+/* ========= THEME ========= */
 :root{
   --bg:#05070b;
   --card:#0f1420;
@@ -39,6 +40,7 @@ h1{
   margin-bottom:16px;
 }
 
+/* ========= CONTROLS ========= */
 .controls{
   display:flex;
   gap:12px;
@@ -50,7 +52,6 @@ input{
   border:1px solid var(--border);
   border-radius:14px;
   padding:10px 16px;
-  font-size:15px;
   min-width:180px;
 }
 
@@ -63,11 +64,17 @@ button{
   cursor:pointer;
 }
 
-.status{margin-top:12px;color:var(--muted)}
-.timer{color:#22d3ee;font-size:13px}
+.status{
+  margin-top:12px;
+  color:var(--muted);
+}
 
-/* Cards */
+.timer{
+  color:#22d3ee;
+  font-size:13px;
+}
 
+/* ========= CARDS ========= */
 .orders{
   margin-top:18px;
   display:grid;
@@ -110,8 +117,8 @@ button{
 .trip{
   background:var(--panel);
   border-radius:14px;
-  padding:10px 12px;
   border:1px solid #1c2638;
+  padding:10px 12px;
 }
 
 .time{
@@ -119,12 +126,12 @@ button{
   font-size:12px;
 }
 
-.text{margin-top:3px;font-size:14px}
+.text{margin-top:3px}
 
 .ship{
   margin-top:6px;
-  padding:8px 12px;
   margin-left:22px;
+  padding:8px 12px;
   background:#070b14;
   border-left:3px solid #22c55e;
   border-radius:6px 12px 12px 6px;
@@ -132,30 +139,31 @@ button{
 
 .ship .time{color:#22c55e}
 
-.empty{opacity:.6;font-style:italic}
+.empty{
+  opacity:.6;
+  font-style:italic;
+}
 </style>
 </head>
 
 <body>
 <div class="wrap">
-  <h1>🚚 FMS Trip Change Audit Bot</h1>
+<h1>🚚 FMS Trip Change Audit Bot</h1>
 
-  <div class="controls">
-    <input id="trip" placeholder="Trip #">
-    <button id="run">Run Audit</button>
-  </div>
+<div class="controls">
+  <input id="trip" placeholder="Trip #">
+  <button id="run">Run Audit</button>
+</div>
 
-  <div class="status" id="status">Idle</div>
-  <div class="timer" id="timer"></div>
+<div class="status" id="status">Idle</div>
+<div class="timer" id="timer"></div>
 
-  <div class="orders" id="orders"></div>
+<div id="orders" class="orders"></div>
 </div>
 
 <script>
 (()=>{
-
-/* ================= CONFIG ================= */
-
+/* ========= CONFIG ========= */
 const BASE="https://fms.item.com";
 const CLIENT="FMS_WEB";
 
@@ -171,8 +179,7 @@ const FMS_PASS="FMSoffload1!";
 let TOKEN=null,timerInt=null;
 const $=id=>document.getElementById(id);
 
-/* ================= AUTH ================= */
-
+/* ========= AUTH ========= */
 async function auth(){
   if(TOKEN) return TOKEN;
 
@@ -209,25 +216,19 @@ async function api(url){
   return r.json();
 }
 
-/* ================= HELPERS ================= */
-
+/* ========= HELPERS ========= */
 function normalizeDO(v){
   return v
-    ? (v.startsWith("DO")?v:`DO${v.replace(/[^0-9]/g,"")}`)
+    ? (v.startsWith("DO") ? v : "DO"+v.replace(/[^0-9]/g,""))
     : "";
 }
 
-function isDispatch(text=""){
-  const t=text.toLowerCase();
-  return (
-    t.includes("dispatched") ||
-    t.includes("undispatch") ||
-    t.includes("un-dispatch") ||
-    t.includes("removed")
-  );
+function isDispatch(txt=""){
+  const t=txt.toLowerCase();
+  return t.includes("dispatched") || t.includes("undispatch") || t.includes("removed");
 }
 
-/* STRICT shipment filter — removes sync noise */
+/* strict shipment filter */
 function extractShipmentEvent(e){
   const s=e?.event?.toLowerCase();
   if(!s) return null;
@@ -250,17 +251,13 @@ function extractShipmentEvent(e){
     s.includes("taskundispatched") ||
     s.includes("changed order status")
   ){
-    return {
-      time:e.event_time,
-      text:e.event.split("].")[0]+"]"
-    };
+    return {time:e.event_time,text:e.event.split("].")[0]+"]"};
   }
 
   return null;
 }
 
-/* ================= MAIN ================= */
-
+/* ========= MAIN AUDIT ========= */
 async function audit(){
 
   TOKEN=null;
@@ -284,11 +281,7 @@ async function audit(){
 
     (tasks?.data||[]).forEach(t=>{
       if(!t.task_no) return;
-      MAP[t.task_no]={
-        PRO:t.tracking_no||"",
-        DO: normalizeDO(t.shipment_order_no||t.order_no||""),
-        PU:t.pu_no||""
-      };
+      MAP[t.task_no]={PRO:t.tracking_no||"",DO:normalizeDO(t.shipment_order_no||t.order_no||""),PU:t.pu_no||""};
     });
 
     /* TRIP EVENTS */
@@ -304,6 +297,7 @@ async function audit(){
       if(m){PRO=m.PRO;DO=m.DO;PU=m.PU;}
 
       const raw=ev.event_description||"";
+
       if(!PRO){
         const x=raw.match(/pro[#:\s]*([0-9]+)/i);
         if(x) PRO=x[1];
@@ -316,16 +310,12 @@ async function audit(){
       const key=PRO||DO||"UNKNOWN";
 
       if(!orders[key]){
-        orders[key]={
-          PRO:PRO||"(none)",
-          DO:DO||"-",
-          PU:PU||"-",
-          events:[]
-        };
+        orders[key]={PRO:PRO||"(none)",DO:DO||"-",PU:PU||"-",events:[]};
       }
 
       orders[key].events.push({
-        time:ev.time||"",
+        time:new Date(ev.time).getTime(),
+        timeLabel:ev.time,
         text:raw,
         wantPickup: raw.toLowerCase().includes("pickup"),
         wantDelivery: raw.toLowerCase().includes("delivery")
@@ -334,19 +324,17 @@ async function audit(){
     });
 
     /* SHIPMENT EVENTS */
-    let allShip=[];
+    let ships=[];
 
-    for(const key in orders){
-      let DO=orders[key].DO;
+    for(const k in orders){
+      let DO=orders[k].DO;
 
-      if(orders[key].PRO && orders[key].PRO!=="(none)"){
+      if(orders[k].PRO && orders[k].PRO!=="(none)"){
+
         try{
-          const s=await api(SEARCH_URL+orders[key].PRO);
+          const s=await api(SEARCH_URL+orders[k].PRO);
           const found=s?.data?.orders?.[0]?.order_no;
-          if(found){
-            DO=normalizeDO(found);
-            orders[key].DO=DO;
-          }
+          if(found) DO=normalizeDO(found);
         }catch{}
       }
 
@@ -355,111 +343,118 @@ async function audit(){
           const sh=await api(SHIP_URL+DO);
           (sh?.data||[]).forEach(se=>{
             const sx=extractShipmentEvent(se);
-            if(sx) allShip.push(sx);
+            if(sx){
+              ships.push({
+                time:new Date(sx.time).getTime(),
+                timeLabel:sx.time,
+                text:sx.text
+              });
+            }
           });
         }catch{}
       }
     }
 
-    /* PAIRING */
+    /* ========= NEAREST-TIME PAIRING ========= */
     const used=new Set();
 
-    for(const key in orders){
+    for(const k in orders){
 
-      const ord=orders[key];
+      orders[k].events.forEach(ev=>{
+        let best=null;
+        let minDiff=Infinity;
 
-      ord.events.forEach(ev=>{
-        let match=null;
+        ships.forEach((s,i)=>{
+          if(used.has(i)) return;
 
-        for(let i=0;i<allShip.length;i++){
-          if(used.has(i)) continue;
-
-          const s=allShip[i];
           const txt=s.text.toLowerCase();
 
-          if(ev.wantPickup && !txt.includes("pickup")) continue;
+          if(ev.wantPickup && !txt.includes("pickup")) return;
 
           if(ev.wantDelivery){
-            if(txt.includes("pickup")) continue;
-            if(!(txt.includes("delivery") || txt.includes("out for delivery"))) continue;
+            if(txt.includes("pickup")) return;
+            if(!(txt.includes("delivery")||txt.includes("out for delivery"))) return;
           }
 
-          match={s,idx:i};
-          break;
-        }
+          const diff=Math.abs(ev.time-s.time);
+          if(diff<minDiff){
+            minDiff=diff;
+            best={s,i};
+          }
+        });
 
-        if(match){
-          used.add(match.idx);
-          ev.ship=match.s;
+        if(best){
+          used.add(best.i);
+          ev.ship=best.s;
         }
-
       });
 
     }
 
-    /* RENDER */
+    /* ========= RENDER ========= */
     clearInterval(timerInt);
     $("status").textContent="✅ Audit complete";
 
     const cont=$("orders");
 
-    for(const key in orders){
+    for(const k in orders){
 
-      const ord=orders[key];
-
+      const ord=orders[k];
       const card=document.createElement("div");
       card.className="order-card";
 
-      const hdr=document.createElement("div");
-      hdr.className="order-header";
-      hdr.innerHTML=`
-        <div class="kv"><span>PRO:</span> ${ord.PRO}</div>
-        <div class="kv"><span>DO:</span> ${ord.DO}</div>
-        <div class="kv"><span>PU:</span> ${ord.PU}</div>
+      card.innerHTML=`
+        <div class="order-header">
+          <div class="kv"><span>PRO:</span> ${ord.PRO}</div>
+          <div class="kv"><span>DO:</span> ${ord.DO}</div>
+          <div class="kv"><span>PU:</span> ${ord.PU}</div>
+        </div>
       `;
 
       const tl=document.createElement("div");
       tl.className="timeline";
 
+      ord.events.sort((a,b)=>a.time-b.time);
+
       ord.events.forEach(e=>{
-        const blk=document.createElement("div");
-        blk.className="trip";
-        blk.innerHTML=`
-          <div class="time">${e.time}</div>
+        const block=document.createElement("div");
+        block.className="trip";
+        block.innerHTML=`
+          <div class="time">${e.timeLabel}</div>
           <div class="text">${e.text}</div>
         `;
 
-        const sh=document.createElement("div");
-        sh.className="ship";
+        const ship=document.createElement("div");
+        ship.className="ship";
 
         if(e.ship){
-          sh.innerHTML=`
-            <div class="time">${e.ship.time}</div>
+          ship.innerHTML=`
+            <div class="time">${e.ship.timeLabel}</div>
             <div class="text">${e.ship.text}</div>
           `;
-        } else{
-          sh.innerHTML=`<div class="empty">— No shipment event —</div>`;
+        } else {
+          ship.innerHTML=`<div class="empty">— No shipment event —</div>`;
         }
 
-        blk.appendChild(sh);
-        tl.appendChild(blk);
+        block.appendChild(ship);
+        tl.appendChild(block);
       });
 
-      card.appendChild(hdr);
       card.appendChild(tl);
       cont.appendChild(card);
+
     }
 
   }catch(e){
     clearInterval(timerInt);
     $("status").textContent="❌ Error";
-    $("orders").innerHTML=`${e.message}`;
+    $("orders").innerHTML=e.message;
   }
 }
 
 $("run").addEventListener("click",audit);
-
 })();
 </script>
+
 </body>
 </html>
