@@ -1,116 +1,113 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8"/>
+<meta charset="UTF-8">
 <title>FMS Trip Change Audit Bot</title>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
 
 <style>
 :root{
   --bg:#05070b;
   --card:#0f1420;
-  --panel:#111827;
+  --row:#141c2b;
   --text:#e6edf6;
   --muted:#93a4b7;
   --accent:#7c3aed;
   --accent2:#22d3ee;
-  --border:#1f2933;
+  --ok:#10b981;
 }
-
 *{box-sizing:border-box}
-
 body{
   margin:0;
-  background:radial-gradient(1200px 700px at 30% -10%,#111827 0%,transparent 60%),var(--bg);
+  background:radial-gradient(1000px 600px at top,#121b2f,transparent 60%),var(--bg);
   color:var(--text);
-  font-family:Inter,system-ui,Arial,sans-serif;
+  font-family:Inter,system-ui,Segoe UI,Roboto,sans-serif;
 }
 
 .wrap{
   max-width:1200px;
-  margin:40px auto;
-  padding:20px;
+  margin:28px auto;
+  padding:18px;
 }
 
-h1{margin-bottom:10px}
+h1{
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
 
 .controls{
   display:flex;
   gap:12px;
+  margin:16px 0 24px;
 }
-
 input{
-  background:#0b0f19;
-  color:var(--text);
-  border:1px solid var(--border);
-  border-radius:14px;
+  background:#0b1220;
+  border:1px solid #1f2933;
+  border-radius:12px;
+  color:#fff;
   padding:10px 14px;
+  width:200px;
 }
-
 button{
-  background:linear-gradient(90deg,var(--accent),var(--accent2));
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
   border:none;
-  border-radius:14px;
-  padding:10px 22px;
-  font-weight:700;
+  border-radius:12px;
+  padding:10px 18px;
+  color:#fff;
+  font-weight:600;
   cursor:pointer;
 }
 
-.status{color:var(--muted);margin-top:8px}
-.timer{color:#22d3ee;font-size:13px}
-
-.orders{display:grid;gap:18px;margin-top:18px}
-
-.order{
-  background:linear-gradient(180deg,#111827,#0b1220);
-  border:1px solid var(--border);
-  border-radius:20px;
-  padding:16px;
-  box-shadow:0 16px 35px rgba(0,0,0,.55);
+.batch{
+  background:linear-gradient(180deg,#121827,#0b1120);
+  border-radius:18px;
+  padding:18px;
+  margin-bottom:26px;
+  border:1px solid #1f2933;
+  box-shadow:0 20px 40px rgba(0,0,0,.4);
 }
 
-.order-header{
+.batch-head{
   display:flex;
-  gap:14px;
-  border-bottom:1px solid var(--border);
-  padding-bottom:10px;
-  margin-bottom:10px;
+  gap:10px;
+  margin-bottom:14px;
+  flex-wrap:wrap;
 }
-
 .tag{
-  background:#070b14;
+  background:#0b1220;
+  border:1px solid #1f2933;
   padding:6px 12px;
-  border-radius:10px;
-  border:1px solid var(--border);
+  border-radius:999px;
   font-weight:600;
 }
 
-.tag span{color:var(--muted)}
-
-.timeline{display:flex;flex-direction:column;gap:10px}
-
-.trip{
-  background:#111827;
-  padding:10px 12px;
-  border-radius:14px;
-  border:1px solid #1c2638;
+.trip-card{
+  background:var(--row);
+  border:1px solid #1f2933;
+  border-radius:16px;
+  padding:14px;
+  margin-bottom:12px;
 }
-
-.ship{
-  margin-top:6px;
-  border-left:3px solid #22c55e;
-  background:#070b14;
-  padding:8px 12px;
-  border-radius:6px 12px 12px 6px;
-}
-
-.time{
+.trip-line{
   color:var(--accent2);
-  font-size:12px;
+  font-family:monospace;
+  margin-bottom:6px;
 }
-.ship .time{color:#22c55e}
-
-.empty{opacity:.6;font-style:italic}
+.trip-desc{
+  margin-bottom:6px;
+}
+.ship-box{
+  background:#050912;
+  border-left:4px solid var(--ok);
+  padding:8px 12px;
+  border-radius:10px;
+  font-family:monospace;
+}
+.ship-missing{
+  opacity:.5;
+  font-style:italic;
+}
 </style>
 </head>
 
@@ -120,330 +117,192 @@ button{
 <h1>🚚 FMS Trip Change Audit Bot</h1>
 
 <div class="controls">
-  <input id="trip" placeholder="Trip #">
-  <button id="run">Run Audit</button>
+  <input id="tripInput" value="B01MUK"/>
+  <button onclick="runAudit()">Run Audit</button>
 </div>
 
-<div id="status" class="status">Idle</div>
-<div id="timer" class="timer"></div>
-
-<div id="orders" class="orders"></div>
+<div id="output"></div>
 
 </div>
 
 <script>
-(()=>{
-const BASE="https://fms.item.com";
-const CLIENT="FMS_WEB";
-const TIME_WINDOW_MS = 120000;
+/***********************************************************
+  MOCK SAMPLE DATA
+  Replace fetch blocks later with real API payloads.
+************************************************************/
 
-const LOGIN_URL=`${BASE}/fms-platform-user/Auth/Login`;
-const TASKS_URL=`${BASE}/fms-platform-dispatch-management/TripDetail/GetTaskList`;
-const HISTORY_URL=`${BASE}/fms-platform-dispatch-management/Trips/GetTripHistory`;
-const SHIP_URL=`${BASE}/fms-platform-order/shipment-order-history/`;
-const SEARCH_URL=`${BASE}/fms-platform-dispatch-management/search-all?Keyword=`;
+// Trip History (driver / trip events)
+const TRIP_EVENTS = [
+  {
+    pro:"367093", do:"DO251200003484", pu:"7709470",
+    time:"2025-12-10T17:15:23",
+    text:"Dispatched DO PRO# 367093 (Delivery Task task# 250000338325) by ManualDispatch"
+  },
+  {
+    pro:"367093", do:"DO251200003484", pu:"7709470",
+    time:"2025-12-10T17:15:23",
+    text:"Dispatched DO PRO# 367093 (Pickup Task task# 250000338324) by ManualDispatch"
+  }
+];
 
-const FMS_USER="RaulEscobar";
-const FMS_PASS="FMSoffload1!";
+// Shipment / order history
+const SHIPMENT_EVENTS = [
+  {
+    time:"2025-12-10T17:15:00",
+    text:"Delivery Task Dispatched to Trip B01MUK.Order was [Pickup Confirmed-PickupDispatched] .current trip [B01MUK]"
+  },
+  {
+    time:"2025-12-10T17:15:00",
+    text:"Pickup Task Dispatched to Trip B01MUK.Order was [New-New] .current trip []"
+  }
+];
 
-let TOKEN=null;
-let timerInt=null;
+/***********************************************************
+  MATCHING ENGINE
+************************************************************/
 
-const $=id=>document.getElementById(id);
+const TWO_MIN_MS = 2 * 60 * 1000;
 
-/* =================== AUTH =================== */
-async function auth(){
-  if(TOKEN) return TOKEN;
-
-  const r=await fetch(LOGIN_URL,{
-    method:"POST",
-    headers:{
-      "Content-Type":"application/json",
-      "fms-client":CLIENT
-    },
-    body:JSON.stringify({
-      account:FMS_USER,
-      password:FMS_PASS
-    })
-  });
-
-  const j=await r.json();
-  TOKEN=j.token||j?.data?.token;
-  if(!TOKEN) throw new Error("Login failed");
-  return TOKEN;
-}
-
-async function api(url){
-  const t=await auth();
-
-  const r=await fetch(url,{
-    headers:{
-      accept:"application/json",
-      "Content-Type":"application/json",
-      "fms-client":CLIENT,
-      "fms-token":t
-    }
-  });
-
-  if(!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.json();
-}
-
-/* =================== HELPERS =================== */
-
-function normalizeDO(v){
-  return v ? (v.startsWith("DO")?v:`DO${v.replace(/[^0-9]/g,"")}`) : "";
-}
-
-function getAction(s=""){
-  s=s.toLowerCase();
-  if(s.includes("undispatch")) return "undispatch";
-  if(s.includes("dispatched")) return "dispatch";
+function getAction(str){
+  if(!str) return null;
+  str = str.toLowerCase();
+  if(str.includes("undispatch")) return "undispatch";
+  if(str.includes("dispatched")) return "dispatch";
   return null;
 }
 
-function getTaskType(s=""){
-  s=s.toLowerCase();
-  if(s.includes("pickup")) return "pickup";
-  if(s.includes("delivery")) return "delivery";
+function getTaskType(str){
+  if(!str) return null;
+  str=str.toLowerCase();
+  if(str.includes("pickup")) return "pickup";
+  if(str.includes("delivery")) return "delivery";
   return null;
 }
 
-/* Highest priority: TRUE execution entries
-   Medium: status change rows
-   Lowest: token fallback */
-function extractShipment(se){
-  const s = se?.event?.toLowerCase();
-  if(!s) return null;
-
+// Extract shipment info with priority weighting
+function extractShipment(row){
+  const s=row.text.toLowerCase();
   const action=getAction(s);
   if(!action) return null;
 
-  let priority=3;
+  const type=getTaskType(s);
 
+  let priority=3;
   if(
     s.includes("task dispatched to trip") ||
     s.includes("task undispatched from trip")
   ){
-    priority=1;
+    priority=1; // true execution event
   }
   else if(
     s.includes("changed order status from") &&
-    s.includes(" to ")
+    s.includes("to")
   ){
-    priority=2;
+    priority=2; // status echo but real movement
   }
 
-  return {
-    time:new Date(se.event_time).getTime(),
-    label:se.event_time,
-    text:se.event,
+  return{
+    time:new Date(row.time).getTime(),
+    type,
     action,
-    type:getTaskType(s),
-    priority
+    priority,
+    text:row.text
   };
 }
 
-/* =================== MAIN =================== */
+// Match shipments to a trip event
+function matchShipment(trip){
+  const tTime=new Date(trip.time).getTime();
+  const tType=getTaskType(trip.text);
+  const tAction=getAction(trip.text);
 
-async function audit(){
+  let best=null;
+  let bestDiff=999999999;
 
-  TOKEN=null;
-  $("orders").innerHTML="";
-  $("status").textContent="Running...";
-  $("timer").textContent="";
+  for(const se of SHIPMENT_EVENTS){
+    const ship=extractShipment(se);
+    if(!ship) continue;
 
-  const tripNo=$("trip").value.trim();
-  if(!tripNo) return alert("Trip required");
+    const diff=Math.abs(ship.time - tTime);
+    if(diff > TWO_MIN_MS) continue;
 
-  const start=Date.now();
-  timerInt=setInterval(()=>{
-    $("timer").textContent=`Elapsed: ${((Date.now()-start)/1000).toFixed(2)}s`;
-  },100);
+    // action must match
+    if(ship.action !== tAction) continue;
 
-  try{
+    // prefer same task if known
+    if(tType && ship.type && ship.type !== tType) continue;
 
-    const task=await api(`${TASKS_URL}?tripNo=${tripNo}`);
+    if(
+      !best ||
+      ship.priority < best.ship.priority ||
+      (ship.priority === best.ship.priority && diff < bestDiff)
+    ){
+      bestDiff = diff;
+      best = { ship };
+    }
+  }
+  return best?.ship || null;
+}
 
-    const MAP={};
-    (task?.data||[]).forEach(t=>{
-      MAP[t.task_no]={
-        PRO:t.tracking_no||"",
-        DO:normalizeDO(t.shipment_order_no||t.order_no||""),
-        PU:t.pu_no||""
+
+/***********************************************************
+  UI RENDER
+************************************************************/
+
+function runAudit(){
+  const output=document.getElementById("output");
+  output.innerHTML="";
+
+  const grouped={};
+
+  for(const t of TRIP_EVENTS){
+    const key=t.pro;
+    if(!grouped[key]){
+      grouped[key]={
+        pro:t.pro,
+        do:t.do,
+        pu:t.pu,
+        rows:[]
       };
-    });
-
-    const hist=await api(`${HISTORY_URL}?tripNo=${tripNo}`);
-
-    const groups={};
-
-    (hist?.data?.trip_history_list||[]).forEach(ev=>{
-      const action=getAction(ev.event_description||"");
-      if(!action) return;
-
-      let PRO="",DO="",PU="";
-      const m=MAP[ev.task_no];
-      if(m){
-        PRO=m.PRO; DO=m.DO; PU=m.PU;
-      }
-
-      if(!PRO){
-        const p=ev.event_description.match(/pro[#:\s]*([0-9]+)/i);
-        if(p) PRO=p[1];
-      }
-
-      if(!DO){
-        const d=ev.event_description.match(/do[#:\s]*([0-9]+)/i);
-        if(d) DO=normalizeDO(d[1]);
-      }
-
-      const key=PRO||DO||"UNKNOWN";
-
-      if(!groups[key]){
-        groups[key]={PRO:PRO||"(none)",DO:DO||"-",PU:PU||"-",events:[]};
-      }
-
-      groups[key].events.push({
-        time:new Date(ev.time).getTime(),
-        label:ev.time,
-        text:ev.event_description,
-        action,
-        type:getTaskType(ev.event_description),
-        ship:null
-      });
-    });
-
-    let ship=[];
-
-    for(const k in groups){
-
-      let DO=groups[k].DO;
-
-      if(groups[k].PRO && groups[k].PRO!=="(none)"){
-        try{
-          const s=await api(SEARCH_URL+groups[k].PRO);
-          const found=s?.data?.orders?.[0]?.order_no;
-          if(found){
-            DO=normalizeDO(found);
-            groups[k].DO=DO;
-          }
-        }catch{}
-      }
-
-      if(DO && DO!=="-"){
-        try{
-          const sh=await api(SHIP_URL+DO);
-          (sh?.data||[]).forEach(e=>{
-            const x=extractShipment(e);
-            if(x) ship.push(x);
-          });
-        }catch{}
-      }
     }
+    grouped[key].rows.push(t);
+  }
 
-    const used=new Set();
+  for(const batch of Object.values(grouped)){
+    const wrap=document.createElement("div");
+    wrap.className="batch";
 
-    for(const k in groups){
-      for(const ev of groups[k].events){
+    const head=document.createElement("div");
+    head.className="batch-head";
+    head.innerHTML=`
+      <div class="tag">PRO: ${batch.pro}</div>
+      <div class="tag">DO: ${batch.do}</div>
+      <div class="tag">PU: ${batch.pu}</div>
+    `;
+    wrap.appendChild(head);
 
-        let best=null;
-        let bestDiff=Infinity;
-
-        for(let i=0;i<ship.length;i++){
-          if(used.has(i)) continue;
-
-          const s=ship[i];
-          const diff=Math.abs(s.time - ev.time);
-
-          if(diff>TIME_WINDOW_MS) continue;
-          if(s.action!==ev.action) continue;
-
-          if(ev.type && s.type && ev.type!==s.type) continue;
-
-          if(
-            !best ||
-            s.priority < best.s.priority ||
-            (s.priority===best.s.priority && diff < bestDiff)
-          ){
-            best={i,s};
-            bestDiff=diff;
-          }
-        }
-
-        if(best){
-          used.add(best.i);
-          ev.ship=best.s;
-        }
-
-      }
-    }
-
-    clearInterval(timerInt);
-    $("status").textContent="✅ Audit complete";
-
-    const cont=$("orders");
-
-    for(const k in groups){
-
-      const o=groups[k];
+    for(const row of batch.rows){
       const card=document.createElement("div");
-      card.className="order";
+      card.className="trip-card";
+
+      const ship=matchShipment(row);
 
       card.innerHTML=`
-        <div class="order-header">
-          <div class="tag"><span>PRO:</span> ${o.PRO}</div>
-          <div class="tag"><span>DO:</span> ${o.DO}</div>
-          <div class="tag"><span>PU:</span> ${o.PU}</div>
+        <div class="trip-line">${row.time}</div>
+        <div class="trip-desc">${row.text}</div>
+        <div class="ship-box ${!ship?'ship-missing':''}">
+          ${ship ? ship.text : "— No shipment event —"}
         </div>
       `;
 
-      const tl=document.createElement("div");
-      tl.className="timeline";
-
-      o.events.sort((a,b)=>a.time-b.time);
-
-      o.events.forEach(e=>{
-
-        const row=document.createElement("div");
-        row.className="trip";
-
-        row.innerHTML=`
-          <div class="time">${e.label}</div>
-          <div>${e.text}</div>
-        `;
-
-        const sblock=document.createElement("div");
-        sblock.className="ship";
-
-        if(e.ship){
-          sblock.innerHTML=`
-            <div class="time">${e.ship.label}</div>
-            <div>${e.ship.text}</div>
-          `;
-        } else {
-          sblock.innerHTML=`<div class="empty">— No shipment event —</div>`;
-        }
-
-        row.appendChild(sblock);
-        tl.appendChild(row);
-
-      });
-
-      card.appendChild(tl);
-      cont.appendChild(card);
+      wrap.appendChild(card);
     }
 
-  }catch(err){
-    clearInterval(timerInt);
-    $("status").textContent="❌ Error";
-    $("orders").textContent=err.message;
+    output.appendChild(wrap);
   }
-
 }
 
-$("run").addEventListener("click",audit);
-})();
+runAudit();
 </script>
 
 </body>
