@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <title>FMS Trip Change Audit Bot</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
 
 <style>
 :root{
@@ -14,8 +15,6 @@
   --accent:#7c3aed;
   --accent2:#22d3ee;
   --border:#1f2933;
-  --green:#22c55e;
-  --red:#ef4444;
 }
 
 *{box-sizing:border-box}
@@ -24,10 +23,9 @@ body{
   margin:0;
   background:radial-gradient(1200px 700px at 30% -10%,#111827 0%,transparent 60%),var(--bg);
   color:var(--text);
-  font-family:Inter,system-ui,sans-serif;
+  font-family:Inter, system-ui, Arial, sans-serif;
 }
 
-/* Layout */
 .wrap{
   max-width:1200px;
   margin:40px auto;
@@ -65,18 +63,13 @@ button{
   cursor:pointer;
 }
 
-.status{
-  margin:12px 0;
-  color:var(--muted);
-}
-
-.timer{
-  color:#22d3ee;
-  font-size:13px;
-}
+.status{margin-top:12px;color:var(--muted)}
+.timer{color:#22d3ee;font-size:13px}
 
 /* Cards */
+
 .orders{
+  margin-top:18px;
   display:grid;
   gap:18px;
 }
@@ -91,24 +84,22 @@ button{
 
 .order-header{
   display:flex;
-  flex-wrap:wrap;
   gap:16px;
-  border-bottom:1px solid var(--border);
   padding-bottom:10px;
+  border-bottom:1px solid var(--border);
   margin-bottom:10px;
+  flex-wrap:wrap;
 }
 
 .kv{
   background:#090d15;
+  border:1px solid var(--border);
   border-radius:10px;
   padding:6px 12px;
-  border:1px solid var(--border);
   font-weight:600;
 }
 
-.kv span{
-  color:var(--muted);
-}
+.kv span{color:var(--muted)}
 
 .timeline{
   display:flex;
@@ -123,37 +114,25 @@ button{
   border:1px solid #1c2638;
 }
 
-.trip line{
-  display:block;
-}
-
 .time{
   color:var(--accent2);
   font-size:12px;
 }
 
-.text{
-  margin-top:3px;
-  font-size:14px;
-}
+.text{margin-top:3px;font-size:14px}
 
 .ship{
   margin-top:6px;
-  margin-left:22px;
   padding:8px 12px;
-  border-left:3px solid var(--accent2);
+  margin-left:22px;
   background:#070b14;
+  border-left:3px solid #22c55e;
   border-radius:6px 12px 12px 6px;
 }
 
-.ship .time{
-  color:#22c55e;
-}
+.ship .time{color:#22c55e}
 
-.empty{
-  opacity:0.6;
-  font-style:italic;
-}
+.empty{opacity:.6;font-style:italic}
 </style>
 </head>
 
@@ -174,26 +153,32 @@ button{
 
 <script>
 (()=>{
+
+/* ================= CONFIG ================= */
+
 const BASE="https://fms.item.com";
 const CLIENT="FMS_WEB";
 
-const LOGIN_URL   = `${BASE}/fms-platform-user/Auth/Login`;
-const TASKS_URL   = `${BASE}/fms-platform-dispatch-management/TripDetail/GetTaskList`;
-const HISTORY_URL = `${BASE}/fms-platform-dispatch-management/Trips/GetTripHistory`;
-const SHIP_URL    = `${BASE}/fms-platform-order/shipment-order-history/`;
-const SEARCH_URL  = `${BASE}/fms-platform-dispatch-management/search-all?Keyword=`;
+const LOGIN_URL=`${BASE}/fms-platform-user/Auth/Login`;
+const TASKS_URL=`${BASE}/fms-platform-dispatch-management/TripDetail/GetTaskList`;
+const HISTORY_URL=`${BASE}/fms-platform-dispatch-management/Trips/GetTripHistory`;
+const SHIP_URL=`${BASE}/fms-platform-order/shipment-order-history/`;
+const SEARCH_URL=`${BASE}/fms-platform-dispatch-management/search-all?Keyword=`;
 
 const FMS_USER="RaulEscobar";
 const FMS_PASS="FMSoffload1!";
 
+let TOKEN=null,timerInt=null;
 const $=id=>document.getElementById(id);
 
-let TOKEN=null, timerInt=null;
+/* ================= AUTH ================= */
 
 async function auth(){
   if(TOKEN) return TOKEN;
+
   $("status").textContent="Logging in…";
-  const r = await fetch(LOGIN_URL,{
+
+  const r=await fetch(LOGIN_URL,{
     method:"POST",
     headers:{
       "Content-Type":"application/json",
@@ -201,16 +186,18 @@ async function auth(){
     },
     body:JSON.stringify({account:FMS_USER,password:FMS_PASS})
   });
+
   if(!r.ok) throw new Error("Login failed");
+
   const j=await r.json();
-  TOKEN=j.token || j?.data?.token;
+  TOKEN=j.token||j?.data?.token;
   if(!TOKEN) throw new Error("Token missing");
   return TOKEN;
 }
 
 async function api(url){
   const t=await auth();
-  const r = await fetch(url,{
+  const r=await fetch(url,{
     headers:{
       accept:"application/json",
       "Content-Type":"application/json",
@@ -222,27 +209,45 @@ async function api(url){
   return r.json();
 }
 
+/* ================= HELPERS ================= */
+
 function normalizeDO(v){
-  if(!v) return "";
-  return v.startsWith("DO") ? v : "DO"+v.replace(/[^0-9]/g,"");
+  return v
+    ? (v.startsWith("DO")?v:`DO${v.replace(/[^0-9]/g,"")}`)
+    : "";
 }
 
-function isDispatch(txt){
-  txt=txt.toLowerCase();
+function isDispatch(text=""){
+  const t=text.toLowerCase();
   return (
-    txt.includes("dispatched") ||
-    txt.includes("undispatch") ||
-    txt.includes("removed")
+    t.includes("dispatched") ||
+    t.includes("undispatch") ||
+    t.includes("un-dispatch") ||
+    t.includes("removed")
   );
 }
 
+/* STRICT shipment filter — removes sync noise */
 function extractShipmentEvent(e){
   const s=e?.event?.toLowerCase();
   if(!s) return null;
+
   if(
-    s.includes("pickup") ||
-    s.includes("delivery") ||
-    s.includes("out for delivery") ||
+    s.includes("tms sync") ||
+    s.includes("sync update") ||
+    s.includes("updated ") ||
+    s.includes("latitude") ||
+    s.includes("longitude") ||
+    s.includes("appointment")
+  ) return null;
+
+  if(
+    s.includes("pickuptask") ||
+    s.includes("deliverytask") ||
+    s.includes("pickupdispatched") ||
+    s.includes("deliverydispatched") ||
+    s.includes("taskdispatched") ||
+    s.includes("taskundispatched") ||
     s.includes("changed order status")
   ){
     return {
@@ -250,12 +255,14 @@ function extractShipmentEvent(e){
       text:e.event.split("].")[0]+"]"
     };
   }
+
   return null;
 }
 
-/* ===== MAIN ===== */
+/* ================= MAIN ================= */
 
 async function audit(){
+
   TOKEN=null;
   $("orders").innerHTML="";
   $("status").textContent="Working…";
@@ -278,7 +285,7 @@ async function audit(){
     (tasks?.data||[]).forEach(t=>{
       if(!t.task_no) return;
       MAP[t.task_no]={
-        PRO:t.tracking_no || "",
+        PRO:t.tracking_no||"",
         DO: normalizeDO(t.shipment_order_no||t.order_no||""),
         PU:t.pu_no||""
       };
@@ -293,8 +300,8 @@ async function audit(){
       if(!isDispatch(ev.event_description||"")) return;
 
       let PRO="",DO="",PU="";
-      const m = ev.task_no ? MAP[ev.task_no] : null;
-      if(m){ PRO=m.PRO; DO=m.DO; PU=m.PU; }
+      const m=ev.task_no?MAP[ev.task_no]:null;
+      if(m){PRO=m.PRO;DO=m.DO;PU=m.PU;}
 
       const raw=ev.event_description||"";
       if(!PRO){
@@ -306,7 +313,7 @@ async function audit(){
         if(y) DO=normalizeDO(y[1]);
       }
 
-      const key = PRO || DO || "UNKNOWN";
+      const key=PRO||DO||"UNKNOWN";
 
       if(!orders[key]){
         orders[key]={
@@ -318,14 +325,15 @@ async function audit(){
       }
 
       orders[key].events.push({
-        time: ev.time || "",
-        text: raw,
+        time:ev.time||"",
+        text:raw,
         wantPickup: raw.toLowerCase().includes("pickup"),
         wantDelivery: raw.toLowerCase().includes("delivery")
       });
+
     });
 
-    /* LOAD SHIPMENTS */
+    /* SHIPMENT EVENTS */
     let allShip=[];
 
     for(const key in orders){
@@ -333,9 +341,12 @@ async function audit(){
 
       if(orders[key].PRO && orders[key].PRO!=="(none)"){
         try{
-          const s = await api(SEARCH_URL+orders[key].PRO);
+          const s=await api(SEARCH_URL+orders[key].PRO);
           const found=s?.data?.orders?.[0]?.order_no;
-          if(found){ DO=normalizeDO(found); orders[key].DO=DO; }
+          if(found){
+            DO=normalizeDO(found);
+            orders[key].DO=DO;
+          }
         }catch{}
       }
 
@@ -362,6 +373,7 @@ async function audit(){
 
         for(let i=0;i<allShip.length;i++){
           if(used.has(i)) continue;
+
           const s=allShip[i];
           const txt=s.text.toLowerCase();
 
@@ -380,6 +392,7 @@ async function audit(){
           used.add(match.idx);
           ev.ship=match.s;
         }
+
       });
 
     }
@@ -424,7 +437,7 @@ async function audit(){
             <div class="time">${e.ship.time}</div>
             <div class="text">${e.ship.text}</div>
           `;
-        }else{
+        } else{
           sh.innerHTML=`<div class="empty">— No shipment event —</div>`;
         }
 
@@ -435,7 +448,6 @@ async function audit(){
       card.appendChild(hdr);
       card.appendChild(tl);
       cont.appendChild(card);
-
     }
 
   }catch(e){
