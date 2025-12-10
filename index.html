@@ -1,308 +1,469 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
+<meta charset="utf-8"/>
 <title>FMS Trip Change Audit Bot</title>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
 
 <style>
 :root{
   --bg:#05070b;
   --card:#0f1420;
-  --row:#141c2b;
   --text:#e6edf6;
   --muted:#93a4b7;
   --accent:#7c3aed;
   --accent2:#22d3ee;
-  --ok:#10b981;
+  --border:#1f2933;
 }
+
 *{box-sizing:border-box}
+
 body{
   margin:0;
-  background:radial-gradient(1000px 600px at top,#121b2f,transparent 60%),var(--bg);
+  padding:0;
+  background:var(--bg);
   color:var(--text);
-  font-family:Inter,system-ui,Segoe UI,Roboto,sans-serif;
+  font-family:Inter,system-ui,Segoe UI,Roboto,Ubuntu,Arial,sans-serif;
 }
 
 .wrap{
-  max-width:1200px;
-  margin:28px auto;
-  padding:18px;
+  max-width:1100px;
+  margin:40px auto;
+  padding:20px;
 }
 
 h1{
-  display:flex;
-  align-items:center;
-  gap:10px;
+  margin:0 0 15px 0;
+  font-size:26px;
 }
 
-.controls{
+.card{
+  background:linear-gradient(180deg,#111827 0%, #0b1220 100%);
+  border:1px solid var(--border);
+  border-radius:16px;
+  padding:20px;
+  box-shadow:0 20px 40px rgba(0,0,0,.5);
+}
+
+.row{
   display:flex;
-  gap:12px;
-  margin:16px 0 24px;
+  flex-wrap:wrap;
+  gap:10px;
+  margin-bottom:10px;
 }
+
+.pw-wrap{
+  position:relative;
+}
+
+.pw-wrap input{
+  width:190px;
+}
+
+.pw-eye{
+  position:absolute;
+  right:12px;
+  top:50%;
+  transform:translateY(-50%);
+  cursor:pointer;
+  width:20px;
+  height:20px;
+  fill:white;
+  opacity:0.85;
+}
+
 input{
-  background:#0b1220;
-  border:1px solid #1f2933;
+  background:#0b0f19;
+  color:var(--text);
+  border:1px solid var(--border);
   border-radius:12px;
-  color:#fff;
   padding:10px 14px;
-  width:200px;
+  font-size:14px;
+  width:190px;
 }
+
 button{
-  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  cursor:pointer;
   border:none;
   border-radius:12px;
   padding:10px 18px;
-  color:#fff;
-  font-weight:600;
-  cursor:pointer;
+  background:linear-gradient(90deg,var(--accent),var(--accent2));
+  color:#05070b;
+  font-weight:700;
+  font-size:14px;
 }
 
-.batch{
-  background:linear-gradient(180deg,#121827,#0b1120);
-  border-radius:18px;
-  padding:18px;
-  margin-bottom:26px;
-  border:1px solid #1f2933;
-  box-shadow:0 20px 40px rgba(0,0,0,.4);
+.status{
+  color:var(--muted);
+  margin:8px 0 6px;
 }
 
-.batch-head{
-  display:flex;
-  gap:10px;
-  margin-bottom:14px;
-  flex-wrap:wrap;
-}
-.tag{
-  background:#0b1220;
-  border:1px solid #1f2933;
-  padding:6px 12px;
-  border-radius:999px;
-  font-weight:600;
+.timer{
+  color:#22d3ee;
+  font-size:13px;
 }
 
-.trip-card{
-  background:var(--row);
-  border:1px solid #1f2933;
-  border-radius:16px;
-  padding:14px;
-  margin-bottom:12px;
-}
-.trip-line{
-  color:var(--accent2);
-  font-family:monospace;
-  margin-bottom:6px;
-}
-.trip-desc{
-  margin-bottom:6px;
-}
-.ship-box{
-  background:#050912;
-  border-left:4px solid var(--ok);
-  padding:8px 12px;
-  border-radius:10px;
-  font-family:monospace;
-}
-.ship-missing{
-  opacity:.5;
-  font-style:italic;
+pre{
+  background:#070b14;
+  border-radius:12px;
+  padding:16px;
+  overflow:auto;
+  max-height:70vh;
+  font-size:13px;
+  border:1px solid var(--border);
+  white-space:pre-wrap;
 }
 </style>
 </head>
 
 <body>
-<div class="wrap">
 
+<div class="wrap">
 <h1>🚚 FMS Trip Change Audit Bot</h1>
 
-<div class="controls">
-  <input id="tripInput" value="B01MUK"/>
-  <button onclick="runAudit()">Run Audit</button>
+<div class="card">
+  <div class="row">
+    <input id="user" placeholder="Username">
+
+    <div class="pw-wrap">
+      <input id="pass" placeholder="Password" type="password">
+      <svg class="pw-eye" id="pwToggle" viewBox="0 0 24 24">
+        <path d="M12 5c-7.633 0-11 7-11 7s3.367 7 11 7 11-7 11-7-3.367-7-11-7zm0 12a5 5 0 110-10 5 5 0 010 10zm0-8a3 3 0 100 6 3 3 0 000-6z"/>
+      </svg>
+    </div>
+
+    <input id="trip" placeholder="Trip #" style="width:160px">
+    <button id="run">Run Audit</button>
+  </div>
+
+  <div class="status" id="status">Idle</div>
+  <div class="timer" id="timer"></div>
+
+  <pre id="out"></pre>
 </div>
-
-<div id="output"></div>
-
 </div>
 
 <script>
-/***********************************************************
-  MOCK SAMPLE DATA
-  Replace fetch blocks later with real API payloads.
-************************************************************/
+(()=>{
+const BASE="https://fms.item.com";
+const CLIENT="FMS_WEB";
 
-// Trip History (driver / trip events)
-const TRIP_EVENTS = [
-  {
-    pro:"367093", do:"DO251200003484", pu:"7709470",
-    time:"2025-12-10T17:15:23",
-    text:"Dispatched DO PRO# 367093 (Delivery Task task# 250000338325) by ManualDispatch"
-  },
-  {
-    pro:"367093", do:"DO251200003484", pu:"7709470",
-    time:"2025-12-10T17:15:23",
-    text:"Dispatched DO PRO# 367093 (Pickup Task task# 250000338324) by ManualDispatch"
-  }
-];
+const LOGIN_URL   = `${BASE}/fms-platform-user/Auth/Login`;
+const TASKS_URL   = `${BASE}/fms-platform-dispatch-management/TripDetail/GetTaskList`;
+const HISTORY_URL = `${BASE}/fms-platform-dispatch-management/Trips/GetTripHistory`;
+const SHIP_URL    = `${BASE}/fms-platform-order/shipment-order-history/`;
+const SEARCH_URL  = `${BASE}/fms-platform-dispatch-management/search-all?Keyword=`;
 
-// Shipment / order history
-const SHIPMENT_EVENTS = [
-  {
-    time:"2025-12-10T17:15:00",
-    text:"Delivery Task Dispatched to Trip B01MUK.Order was [Pickup Confirmed-PickupDispatched] .current trip [B01MUK]"
-  },
-  {
-    time:"2025-12-10T17:15:00",
-    text:"Pickup Task Dispatched to Trip B01MUK.Order was [New-New] .current trip []"
-  }
-];
+const $ = id => document.getElementById(id);
 
-/***********************************************************
-  MATCHING ENGINE
-************************************************************/
+let TOKEN=null;
+let timerInt=null;
 
-const TWO_MIN_MS = 2 * 60 * 1000;
+/* password eye toggle */
+$("pwToggle").addEventListener("click",()=>{
+  const p=$("pass");
+  p.type = p.type==="password" ? "text" : "password";
+});
+
+/* login */
+async function auth(){
+  if(TOKEN) return TOKEN;
+
+  $("status").textContent="Logging in…";
+
+  const r = await fetch(LOGIN_URL,{
+    method:"POST",
+    headers:{
+      "Content-Type":"application/json",
+      "fms-client":CLIENT
+    },
+    body:JSON.stringify({
+      account:$("user").value.trim(),
+      password:$("pass").value.trim()
+    })
+  });
+
+  if(!r.ok) throw new Error("Login failed");
+
+  const j=await r.json();
+  TOKEN=j.token || j?.data?.token;
+  if(!TOKEN) throw new Error("Token missing");
+
+  return TOKEN;
+}
+
+/* API */
+async function api(url){
+  const t=await auth();
+  const r=await fetch(url,{
+    headers:{
+      "accept":"application/json",
+      "Content-Type":"application/json",
+      "fms-client":CLIENT,
+      "fms-token":t
+    }
+  });
+  if(!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+/* helpers */
+
+function looksUnDispatch(desc){
+  desc = desc.toLowerCase();
+  return (
+    desc.includes("undispatch") ||
+    desc.includes("un-dispatch") ||
+    desc.includes("un dispatch") ||
+    desc.includes("removed")
+  );
+}
+
+function normalizeDO(doVal){
+  if(!doVal) return "";
+  if(doVal.startsWith("DO")) return doVal;
+  return "DO" + doVal.replace(/[^0-9]/g,"");
+}
 
 function getAction(str){
-  if(!str) return null;
-  str = str.toLowerCase();
+  str=str.toLowerCase();
   if(str.includes("undispatch")) return "undispatch";
   if(str.includes("dispatched")) return "dispatch";
   return null;
 }
 
 function getTaskType(str){
-  if(!str) return null;
   str=str.toLowerCase();
   if(str.includes("pickup")) return "pickup";
   if(str.includes("delivery")) return "delivery";
   return null;
 }
 
-// Extract shipment info with priority weighting
-function extractShipment(row){
-  const s=row.text.toLowerCase();
-  const action=getAction(s);
+/* shipment event extraction w/ priority */
+function extractShipmentEvent(e){
+  const s = e?.event?.toLowerCase();
+  if(!s) return null;
+
+  const action = getAction(s);
   if(!action) return null;
 
-  const type=getTaskType(s);
+  const type = getTaskType(s);
 
-  let priority=3;
+  let priority = 3;
+
   if(
     s.includes("task dispatched to trip") ||
     s.includes("task undispatched from trip")
   ){
-    priority=1; // true execution event
+    priority = 1;
   }
   else if(
     s.includes("changed order status from") &&
     s.includes("to")
   ){
-    priority=2; // status echo but real movement
+    priority = 2;
   }
 
-  return{
-    time:new Date(row.time).getTime(),
-    type,
+  return {
+    time: new Date(e.event_time).getTime(),
+    rawTime: e.event_time,
+    text: e.event.split("].")[0] + "]",
     action,
-    priority,
-    text:row.text
+    type,
+    priority
   };
 }
 
-// Match shipments to a trip event
-function matchShipment(trip){
-  const tTime=new Date(trip.time).getTime();
-  const tType=getTaskType(trip.text);
-  const tAction=getAction(trip.text);
+/* MAIN */
+async function audit(){
+  $("out").textContent="";
+  $("status").textContent="Starting…";
+  $("timer").textContent="";
+  TOKEN=null;
 
-  let best=null;
-  let bestDiff=999999999;
+  const tripNo=$("trip").value.trim();
+  if(!tripNo) return alert("Trip # required");
 
-  for(const se of SHIPMENT_EVENTS){
-    const ship=extractShipment(se);
-    if(!ship) continue;
+  const start=Date.now();
+  timerInt=setInterval(()=>{
+    $("timer").textContent = `Elapsed: ${((Date.now()-start)/1000).toFixed(2)}s`;
+  },100);
 
-    const diff=Math.abs(ship.time - tTime);
-    if(diff > TWO_MIN_MS) continue;
+  try{
+    $("status").textContent="Fetching tasks…";
+    const tasks=await api(`${TASKS_URL}?tripNo=${tripNo}`);
 
-    // action must match
-    if(ship.action !== tAction) continue;
-
-    // prefer same task if known
-    if(tType && ship.type && ship.type !== tType) continue;
-
-    if(
-      !best ||
-      ship.priority < best.ship.priority ||
-      (ship.priority === best.ship.priority && diff < bestDiff)
-    ){
-      bestDiff = diff;
-      best = { ship };
-    }
-  }
-  return best?.ship || null;
-}
-
-
-/***********************************************************
-  UI RENDER
-************************************************************/
-
-function runAudit(){
-  const output=document.getElementById("output");
-  output.innerHTML="";
-
-  const grouped={};
-
-  for(const t of TRIP_EVENTS){
-    const key=t.pro;
-    if(!grouped[key]){
-      grouped[key]={
-        pro:t.pro,
-        do:t.do,
-        pu:t.pu,
-        rows:[]
+    const MAP={};
+    (tasks?.data||[]).forEach(t=>{
+      if(!t.task_no) return;
+      MAP[t.task_no]={
+        PRO:t.tracking_no || "",
+        DO:normalizeDO(t.shipment_order_no || t.order_no || ""),
+        PU:t.pu_no || ""
       };
+    });
+
+    $("status").textContent="Fetching trip history…";
+    const hist=await api(`${HISTORY_URL}?tripNo=${tripNo}`);
+
+    const perBucket={};
+
+    (hist?.data?.trip_history_list||[]).forEach(ev=>{
+      const raw=ev.event_description || "";
+      const desc=raw.toLowerCase();
+
+      const isDispatch   = desc.includes("dispatched");
+      const isUnDispatch = looksUnDispatch(desc);
+      if(!isDispatch && !isUnDispatch) return;
+
+      let PRO="", DO="", PU="";
+
+      let mapped = ev.task_no ? MAP[ev.task_no] : null;
+      if(mapped){
+        PRO = mapped.PRO;
+        DO  = mapped.DO;
+        PU  = mapped.PU;
+      }
+
+      const proMatch = raw.match(/pro[#:\s]*([0-9]+)/i);
+      if(!PRO && proMatch) PRO = proMatch[1];
+
+      const doMatch = raw.match(/do[#:\s]*([0-9]+)/i);
+      if(!DO && doMatch) DO = normalizeDO(doMatch[1]);
+
+      if(!DO && ev.order_no) DO = normalizeDO(ev.order_no);
+
+      const key = PRO || DO || "(none)";
+      if(!perBucket[key]){
+        perBucket[key] = {
+          PRO: PRO || "(none)",
+          DO:  DO || "-",
+          PU:  PU || "-",
+          events:[]
+        };
+      }
+
+      perBucket[key].events.push({
+        type:"trip",
+        time:new Date(ev.time).getTime(),
+        rawTime:ev.time,
+        text:raw,
+        action:getAction(raw),
+        taskType:getTaskType(raw),
+        user:ev.user || ""
+      });
+    });
+
+    $("status").textContent="Matching shipment events…";
+
+    for(const bucket of Object.keys(perBucket)){
+      const rec=perBucket[bucket];
+
+      let DO = rec.DO === "-" ? "" : rec.DO;
+
+      if(rec.PRO && rec.PRO !== "(none)"){
+        try{
+          const s = await api(SEARCH_URL + rec.PRO);
+          const found = s?.data?.orders?.[0]?.order_no;
+          if(found){
+            DO = normalizeDO(found);
+            rec.DO = DO;
+          }
+        }catch{}
+      }
+
+      let shipEvents=[];
+      if(DO){
+        try{
+          const s = await api(SHIP_URL + DO);
+          shipEvents = s?.data || [];
+        }catch{}
+      }
+
+      const additions=[];
+
+      rec.events.forEach(te=>{
+        let best=null;
+        let bestDiff=Infinity;
+
+        shipEvents.forEach(se=>{
+          const sx = extractShipmentEvent(se);
+          if(!sx) return;
+
+          if(sx.action !== te.action) return;
+          if(te.taskType && sx.type && te.taskType !== sx.type) return;
+
+          const diff = Math.abs(te.time - sx.time);
+          if(diff > 120000) return;
+
+          if(
+            !best ||
+            sx.priority < best.priority ||
+            (sx.priority === best.priority && diff < bestDiff)
+          ){
+            best = sx;
+            bestDiff = diff;
+          }
+        });
+
+        if(best){
+          additions.push({
+            type:"ship",
+            time: best.rawTime,
+            text: best.text,
+            user:""
+          });
+        }else{
+          additions.push({
+            type:"ship",
+            time:"",
+            text:"— No shipment event —",
+            user:""
+          });
+        }
+      });
+
+      rec.events = rec.events.concat(additions);
+
+      rec.events.sort((a,b)=>{
+        if(!a.time && !b.time) return 0;
+        if(!a.time) return 1;
+        if(!b.time) return -1;
+        if(a.time===b.time) return a.type==="trip" ? -1 : 1;
+        return a.time - b.time;
+      });
     }
-    grouped[key].rows.push(t);
-  }
 
-  for(const batch of Object.values(grouped)){
-    const wrap=document.createElement("div");
-    wrap.className="batch";
+    clearInterval(timerInt);
+    $("status").textContent="✅ Audit complete";
 
-    const head=document.createElement("div");
-    head.className="batch-head";
-    head.innerHTML=`
-      <div class="tag">PRO: ${batch.pro}</div>
-      <div class="tag">DO: ${batch.do}</div>
-      <div class="tag">PU: ${batch.pu}</div>
-    `;
-    wrap.appendChild(head);
+    let out="";
 
-    for(const row of batch.rows){
-      const card=document.createElement("div");
-      card.className="trip-card";
+    Object.keys(perBucket).forEach(key=>{
+      const r=perBucket[key];
 
-      const ship=matchShipment(row);
+      out+=`PRO ${r.PRO}\n`;
+      out+=`DO  ${r.DO}\n`;
+      out+=`PU  ${r.PU}\n`;
 
-      card.innerHTML=`
-        <div class="trip-line">${row.time}</div>
-        <div class="trip-desc">${row.text}</div>
-        <div class="ship-box ${!ship?'ship-missing':''}">
-          ${ship ? ship.text : "— No shipment event —"}
-        </div>
-      `;
+      r.events.forEach(ev=>{
+        const ts = ev.time ? ev.rawTime : "                      ";
+        out+=`  ${ts} | ${ev.text}${ev.user?` (${ev.user})`:""}\n`;
+      });
 
-      wrap.appendChild(card);
-    }
+      out+="--------------------------------------------\n";
+    });
 
-    output.appendChild(wrap);
+    $("out").textContent = out || "No events found.";
+
+  }catch(e){
+    clearInterval(timerInt);
+    $("status").textContent="❌ Error";
+    $("out").textContent = e.message;
   }
 }
 
-runAudit();
+$("run").addEventListener("click", audit);
+})();
 </script>
 
 </body>
