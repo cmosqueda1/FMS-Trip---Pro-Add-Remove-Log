@@ -51,24 +51,9 @@ h1{
   margin-bottom:10px;
 }
 
-.pw-wrap{
-  position:relative;
-}
-
-.pw-wrap input{
-  width:190px;
-}
-
-.pw-eye{
-  position:absolute;
-  right:12px;
-  top:50%;
-  transform:translateY(-50%);
-  cursor:pointer;
-  width:20px;
-  height:20px;
-  fill:white;
-  opacity:0.85;
+/* hide login fields */
+.login-hidden{
+  display:none !important;
 }
 
 input{
@@ -122,17 +107,14 @@ pre{
 
 <div class="card">
   <div class="row">
-    <input id="user" placeholder="Username">
 
-    <div class="pw-wrap">
-      <input id="pass" placeholder="Password" type="password">
-      <svg class="pw-eye" id="pwToggle" viewBox="0 0 24 24">
-        <path d="M12 5c-7.633 0-11 7-11 7s3.367 7 11 7 11-7 11-7-3.367-7-11-7zm0 12a5 5 0 110-10 5 5 0 010 10zm0-8a3 3 0 100 6 3 3 0 000-6z"/>
-      </svg>
-    </div>
+    <!-- Hidden hard-coded credentials -->
+    <input id="user" class="login-hidden" value="RaulEscobar">
+    <input id="pass" class="login-hidden" value="FMSoffload1!">
 
     <input id="trip" placeholder="Trip #" style="width:160px">
     <button id="run">Run Audit</button>
+
   </div>
 
   <div class="status" id="status">Idle</div>
@@ -144,6 +126,7 @@ pre{
 
 <script>
 (()=>{
+
 const BASE="https://fms.item.com";
 const CLIENT="FMS_WEB";
 
@@ -158,13 +141,7 @@ const $ = id => document.getElementById(id);
 let TOKEN=null;
 let timerInt=null;
 
-/* password eye toggle */
-$("pwToggle").addEventListener("click",()=>{
-  const p=$("pass");
-  p.type = p.type==="password" ? "text" : "password";
-});
-
-/* login */
+/* login (hard-coded) */
 async function auth(){
   if(TOKEN) return TOKEN;
 
@@ -177,8 +154,8 @@ async function auth(){
       "fms-client":CLIENT
     },
     body:JSON.stringify({
-      account:$("user").value.trim(),
-      password:$("pass").value.trim()
+      account: "RaulEscobar",
+      password: "FMSoffload1!"
     })
   });
 
@@ -191,7 +168,7 @@ async function auth(){
   return TOKEN;
 }
 
-/* API */
+/* API wrapper */
 async function api(url){
   const t=await auth();
   const r=await fetch(url,{
@@ -206,8 +183,27 @@ async function api(url){
   return r.json();
 }
 
-/* helpers */
+/* shipment event filter */
+function extractShipmentEvent(e){
+  const s = e?.event?.toLowerCase();
+  if(!s) return null;
 
+  if(
+    s.includes("changed order status") ||
+    s.includes("delivered") ||
+    s.includes("pickup") ||
+    s.includes("out for delivery")
+  ){
+    return {
+      time:e.event_time,
+      text:e.event.split("].")[0] + "]"
+    };
+  }
+
+  return null;
+}
+
+/* undispatch detection */
 function looksUnDispatch(desc){
   desc = desc.toLowerCase();
   return (
@@ -218,59 +214,11 @@ function looksUnDispatch(desc){
   );
 }
 
+/* normalize DO */
 function normalizeDO(doVal){
   if(!doVal) return "";
   if(doVal.startsWith("DO")) return doVal;
   return "DO" + doVal.replace(/[^0-9]/g,"");
-}
-
-function getAction(str){
-  str=str.toLowerCase();
-  if(str.includes("undispatch")) return "undispatch";
-  if(str.includes("dispatched")) return "dispatch";
-  return null;
-}
-
-function getTaskType(str){
-  str=str.toLowerCase();
-  if(str.includes("pickup")) return "pickup";
-  if(str.includes("delivery")) return "delivery";
-  return null;
-}
-
-/* shipment event extraction w/ priority */
-function extractShipmentEvent(e){
-  const s = e?.event?.toLowerCase();
-  if(!s) return null;
-
-  const action = getAction(s);
-  if(!action) return null;
-
-  const type = getTaskType(s);
-
-  let priority = 3;
-
-  if(
-    s.includes("task dispatched to trip") ||
-    s.includes("task undispatched from trip")
-  ){
-    priority = 1;
-  }
-  else if(
-    s.includes("changed order status from") &&
-    s.includes("to")
-  ){
-    priority = 2;
-  }
-
-  return {
-    time: new Date(e.event_time).getTime(),
-    rawTime: e.event_time,
-    text: e.event.split("].")[0] + "]",
-    action,
-    type,
-    priority
-  };
 }
 
 /* MAIN */
@@ -296,9 +244,9 @@ async function audit(){
     (tasks?.data||[]).forEach(t=>{
       if(!t.task_no) return;
       MAP[t.task_no]={
-        PRO:t.tracking_no || "",
-        DO:normalizeDO(t.shipment_order_no || t.order_no || ""),
-        PU:t.pu_no || ""
+        PRO: t.tracking_no || "",
+        DO:  normalizeDO(t.shipment_order_no || t.order_no || ""),
+        PU:  t.pu_no || ""
       };
     });
 
@@ -308,7 +256,7 @@ async function audit(){
     const perBucket={};
 
     (hist?.data?.trip_history_list||[]).forEach(ev=>{
-      const raw=ev.event_description || "";
+      const raw=ev.event_description||"";
       const desc=raw.toLowerCase();
 
       const isDispatch   = desc.includes("dispatched");
@@ -319,37 +267,37 @@ async function audit(){
 
       let mapped = ev.task_no ? MAP[ev.task_no] : null;
       if(mapped){
-        PRO = mapped.PRO;
-        DO  = mapped.DO;
-        PU  = mapped.PU;
+        PRO=mapped.PRO;
+        DO=mapped.DO;
+        PU=mapped.PU;
       }
 
       const proMatch = raw.match(/pro[#:\s]*([0-9]+)/i);
-      if(!PRO && proMatch) PRO = proMatch[1];
+      if(!PRO && proMatch) PRO=proMatch[1];
 
       const doMatch = raw.match(/do[#:\s]*([0-9]+)/i);
-      if(!DO && doMatch) DO = normalizeDO(doMatch[1]);
+      if(!DO && doMatch) DO=normalizeDO(doMatch[1]);
 
-      if(!DO && ev.order_no) DO = normalizeDO(ev.order_no);
+      if(!DO && ev.order_no){
+        DO=normalizeDO(ev.order_no);
+      }
 
       const key = PRO || DO || "(none)";
+
       if(!perBucket[key]){
-        perBucket[key] = {
-          PRO: PRO || "(none)",
-          DO:  DO || "-",
-          PU:  PU || "-",
+        perBucket[key]={
+          PRO: PRO||"(none)",
+          DO:  DO||"-",
+          PU:  PU||"-",
           events:[]
         };
       }
 
       perBucket[key].events.push({
         type:"trip",
-        time:new Date(ev.time).getTime(),
-        rawTime:ev.time,
+        time:ev.time,
         text:raw,
-        action:getAction(raw),
-        taskType:getTaskType(raw),
-        user:ev.user || ""
+        user:ev.user||""
       });
     });
 
@@ -358,15 +306,15 @@ async function audit(){
     for(const bucket of Object.keys(perBucket)){
       const rec=perBucket[bucket];
 
-      let DO = rec.DO === "-" ? "" : rec.DO;
+      let DO = rec.DO==="-" ? "" : rec.DO;
 
-      if(rec.PRO && rec.PRO !== "(none)"){
+      if(rec.PRO && rec.PRO!=="(none)"){
         try{
-          const s = await api(SEARCH_URL + rec.PRO);
+          const s=await api(SEARCH_URL + rec.PRO);
           const found = s?.data?.orders?.[0]?.order_no;
           if(found){
-            DO = normalizeDO(found);
-            rec.DO = DO;
+            DO=normalizeDO(found);
+            rec.DO=DO;
           }
         }catch{}
       }
@@ -374,62 +322,43 @@ async function audit(){
       let shipEvents=[];
       if(DO){
         try{
-          const s = await api(SHIP_URL + DO);
-          shipEvents = s?.data || [];
+          const s=await api(SHIP_URL+DO);
+          shipEvents=s?.data||[];
         }catch{}
       }
 
       const additions=[];
 
       rec.events.forEach(te=>{
-        let best=null;
-        let bestDiff=Infinity;
+        let nearest=null;
 
         shipEvents.forEach(se=>{
-          const sx = extractShipmentEvent(se);
+          const sx=extractShipmentEvent(se);
           if(!sx) return;
 
-          if(sx.action !== te.action) return;
-          if(te.taskType && sx.type && te.taskType !== sx.type) return;
-
-          const diff = Math.abs(te.time - sx.time);
-          if(diff > 120000) return;
-
-          if(
-            !best ||
-            sx.priority < best.priority ||
-            (sx.priority === best.priority && diff < bestDiff)
-          ){
-            best = sx;
-            bestDiff = diff;
+          const diff=Math.abs(new Date(te.time)-new Date(sx.time));
+          if(!nearest||diff<nearest.diff){
+            nearest={diff,sx};
           }
         });
 
-        if(best){
-          additions.push({
-            type:"ship",
-            time: best.rawTime,
-            text: best.text,
-            user:""
-          });
-        }else{
-          additions.push({
-            type:"ship",
-            time:"",
-            text:"— No shipment event —",
-            user:""
-          });
-        }
+        additions.push(
+          nearest
+            ? {type:"ship",time:nearest.sx.time,text:nearest.sx.text,user:""}
+            : {type:"ship",time:"",text:"— No shipment event —",user:""}
+        );
       });
 
-      rec.events = rec.events.concat(additions);
+      rec.events=rec.events.concat(additions);
 
       rec.events.sort((a,b)=>{
-        if(!a.time && !b.time) return 0;
+        if(!a.time&&!b.time) return 0;
         if(!a.time) return 1;
         if(!b.time) return -1;
-        if(a.time===b.time) return a.type==="trip" ? -1 : 1;
-        return a.time - b.time;
+        let ta=new Date(a.time).getTime();
+        let tb=new Date(b.time).getTime();
+        if(ta===tb) return a.type==="trip" ? -1 : 1;
+        return ta-tb;
       });
     }
 
@@ -446,7 +375,7 @@ async function audit(){
       out+=`PU  ${r.PU}\n`;
 
       r.events.forEach(ev=>{
-        const ts = ev.time ? ev.rawTime : "                      ";
+        const ts = ev.time ? ev.time : "                      ";
         out+=`  ${ts} | ${ev.text}${ev.user?` (${ev.user})`:""}\n`;
       });
 
@@ -458,11 +387,12 @@ async function audit(){
   }catch(e){
     clearInterval(timerInt);
     $("status").textContent="❌ Error";
-    $("out").textContent = e.message;
+    $("out").textContent=e.message;
   }
 }
 
 $("run").addEventListener("click", audit);
+
 })();
 </script>
 
